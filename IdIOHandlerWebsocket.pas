@@ -35,7 +35,7 @@ type
     FWriteTextToTarget: Boolean;
     FCloseCodeSend: Boolean;
 
-    function InternalReadDataFromSource(var VBuffer: TIdBytes): Integer;
+    function InternalReadDataFromSource(var VBuffer: TIdBytes; ARaiseExceptionOnTimeout: Boolean): Integer;
     function ReadDataFromSource(var VBuffer: TIdBytes): Integer; override;
     function WriteDataToTarget (const ABuffer: TIdBytes; const AOffset, ALength: Integer): Integer; override;
 
@@ -228,8 +228,10 @@ begin
 end;
 
 function TIdIOHandlerWebsocket.InternalReadDataFromSource(
-  var VBuffer: TIdBytes): Integer;
+  var VBuffer: TIdBytes; ARaiseExceptionOnTimeout: Boolean): Integer;
 begin
+  SetLength(VBuffer, 0);
+
   CheckForDisconnect;
   if not Readable(ReadTimeout) or
      not Opened or
@@ -241,7 +243,10 @@ begin
     else if not SourceIsAvailable then
       EIdClosedSocket.Toss(RSStatusDisconnected);
     GStack.CheckForSocketError(GStack.WSGetLastError); //check for socket error
-    EIdReadTimeout.Toss(RSIdNoDataToRead);  //exit, no data can be received
+    if ARaiseExceptionOnTimeout then
+      EIdReadTimeout.Toss(RSIdNoDataToRead)  //exit, no data can be received
+    else
+      Exit;
   end;
 
   SetLength(VBuffer, RecvBufferSize);
@@ -390,7 +395,8 @@ begin
      opcodes. *)
   lFirstDataCode := wdcNone;
   FMessageStream.Clear;
-  repeat
+
+  repeat
     //read a single frame
     iReadCount := ReadFrame(bFIN, bRSV1, bRSV2, bRSV3, lDataCode, iaReadBuffer);
     if (iReadCount > 0) or
@@ -515,8 +521,10 @@ var
     while FWSInputBuffer.Size <= iInputPos do
     begin
       //FWSInputBuffer.AsString;
-      InternalReadDataFromSource(temp);
+      InternalReadDataFromSource(temp, True); 
       FWSInputBuffer.Write(temp);
+      if FWSInputBuffer.Size <= iInputPos then
+        Sleep(1);
     end;
 
     //Self.ReadByte copies all data everytime (because the first byte must be removed) so we use index (much more efficient)
@@ -531,8 +539,10 @@ var
   begin
     while FWSInputBuffer.Size < aCount do
     begin
-      InternalReadDataFromSource(temp);
+      InternalReadDataFromSource(temp, True); 
       FWSInputBuffer.Write(temp);
+      if FWSInputBuffer.Size < aCount then
+        Sleep(1);
     end;
 
     FWSInputBuffer.ExtractToBytes(Result, aCount);

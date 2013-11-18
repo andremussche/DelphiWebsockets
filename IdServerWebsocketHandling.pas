@@ -3,7 +3,12 @@ unit IdServerWebsocketHandling;
 interface
 
 uses
-  IdContext, IdCustomHTTPServer, IdHashSHA1,
+  IdContext, IdCustomHTTPServer,
+  {$IF CompilerVersion <= 21.0}  //D2010
+  IdHashSHA1,
+  {$else}
+  IdHashSHA,                     //XE3 etc
+  {$IFEND}
   IdServerSocketIOHandling, IdServerWebsocketContext,
   Classes, IdServerBaseHandling, IdIOHandlerWebsocket;
 
@@ -263,9 +268,12 @@ begin
     if (sValue <> '') then
     begin
       context.WebSocketVersion := StrToIntDef(sValue, 0);
-      if context.WebSocketVersion < 13 then
-        Abort;  //must be at least 13
-    end
+
+      if context.WebSocketVersion < 13 then
+
+        Abort;  //must be at least 13
+
+    end
     else
       Abort; //must exist
 

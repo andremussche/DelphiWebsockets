@@ -26,7 +26,10 @@ function TIdServerIOHandlerWebsocket.Accept(ASocket: TIdSocketHandle;
 begin
   Result := inherited Accept(ASocket, AListenerThread, AYarn);
   if Result <> nil then
+  begin
     (Result as TIdIOHandlerWebsocket).IsServerSide := True; //server must not mask, only client
+    (Result as TIdIOHandlerWebsocket).UseNagle := False;
+  end;
 end;
 
 procedure TIdServerIOHandlerWebsocket.InitComponent;
@@ -40,7 +43,10 @@ function TIdServerIOHandlerWebsocket.MakeClientIOHandler(
 begin
   Result := inherited MakeClientIOHandler(ATheThread);
   if Result <> nil then
+  begin
     (Result as TIdIOHandlerWebsocket).IsServerSide := True; //server must not mask, only client
+    (Result as TIdIOHandlerWebsocket).UseNagle := False;
+  end;
 end;
 
 end.

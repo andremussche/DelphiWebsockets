@@ -75,7 +75,7 @@ end;
 function TIdServerWSContext.IsSocketIO: Boolean;
 begin
   //FDocument	= '/socket.io/1/websocket/13412152'
-  Result := StartsText('/socket.io/1/websocket', FPath);
+  Result := StartsText('/socket.io/1/websocket/', FPath);
 end;
 
 end.

@@ -405,6 +405,7 @@ procedure TROIndyHTTPSocketIOClient.AsyncDispatchEvent(const aEvent: TStream);
 var
   iEventNr: Integer;
   cWSNR: array[0..High(C_RO_WS_NR)] of AnsiChar;
+  s: string;
 begin
   if aEvent.Size > Length(C_RO_WS_NR) + SizeOf(iEventNr) then
   begin
@@ -415,7 +416,16 @@ begin
     if cWSNR = C_RO_WS_NR then
     begin
       aEvent.Read(iEventNr, SizeOf(iEventNr));
-      Assert(iEventNr < 0, 'must be negative number for RO events');
+      if iEventNr >= 0 then
+      begin
+        aEvent.Position := 0;
+        with TStreamReader.Create(aEvent) do
+        begin
+          s := ReadToEnd;
+          Free;
+        end;
+        Assert(iEventNr < 0, 'must be negative number for RO events: ' + s);
+      end;
       //trunc
       aEvent.Size := aEvent.Size - Length(C_RO_WS_NR) - SizeOf(iEventNr);
 

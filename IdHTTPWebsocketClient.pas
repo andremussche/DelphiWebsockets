@@ -4,7 +4,13 @@ interface
 
 uses
   Classes,
-  IdHTTP, IdHashSHA1, IdIOHandler,
+  IdHTTP,
+  {$IF CompilerVersion <= 21.0}  //D2010
+  IdHashSHA1,
+  {$else}
+  IdHashSHA,                     //XE3 etc
+  {$IFEND}
+  IdIOHandler,
   IdIOHandlerWebsocket, ExtCtrls, IdWinsock2, Generics.Collections, SyncObjs,
   IdSocketIOHandling;
 
@@ -147,8 +153,7 @@ implementation
 
 uses
   IdCoderMIME, SysUtils, Math, IdException, IdStackConsts, IdStack,
-  IdStackBSDBase, IdGlobal, Windows, StrUtils, mcBaseNamedThread,
-  mcFinalizationHelper;
+  IdStackBSDBase, IdGlobal, Windows, StrUtils;
 
 //type
 //  TAnonymousThread = class(TThread)
@@ -187,6 +192,7 @@ begin
   FHash := TIdHashSHA1.Create;
 
   IOHandler := TIdIOHandlerWebsocket.Create(nil);
+  IOHandler.UseNagle := False;
   ManagedIOHandler := True;
 
   FSocketIO  := TIdSocketIOHandling_Ext.Create;
@@ -216,19 +222,16 @@ end;
 
 procedure TIdHTTPWebsocketClient.AsyncDispatchEvent(const aEvent: string);
 begin
-  if FSocketIOCompatible then
-    FSocketIO.ProcessSocketIORequest(FSocketIOContext as TSocketIOContext, aEvent)
-  else
-  begin
-    if not Assigned(OnTextData) then Exit;
-    //events during dispatch? channel is busy so offload event dispatching to different thread!
-    TIdWebsocketDispatchThread.Instance.QueueEvent(
-      procedure
-      begin
-        if Assigned(OnTextData) then
-          OnTextData(aEvent);
-      end);
-  end;
+  //if not Assigned(OnTextData) then Exit;
+  //events during dispatch? channel is busy so offload event dispatching to different thread!
+  TIdWebsocketDispatchThread.Instance.QueueEvent(
+    procedure
+    begin
+      if FSocketIOCompatible then
+        FSocketIO.ProcessSocketIORequest(FSocketIOContext as TSocketIOContext, aEvent)
+      else if Assigned(OnTextData) then
+        OnTextData(aEvent);
+    end);
 end;
 
 destructor TIdHTTPWebsocketClient.Destroy;
@@ -467,6 +470,10 @@ begin
       CheckForGracefulDisconnect(True);
       CheckConnected;
       Assert(Self.Connected);
+
+      if Response.ResponseCode = 0 then
+        Response.ResponseText := Response.ResponseText;
+
       if Response.ResponseCode <> 200{ok} then
       begin
         aFailedReason := Format('Error while upgrading: "%d: %s"',[ResponseCode, ResponseText]);
@@ -872,7 +879,7 @@ begin
   try
     //already exists?
     if l.IndexOf(aChannel) >= 0 then Exit;
-    
+
     Assert(l.Count < 64, 'Max 64 connections can be handled by one read thread!');  //due to restrictions of the "select" API
     l.Add(aChannel);
 
@@ -895,9 +902,11 @@ end;
 
 procedure TIdWebsocketMultiReadThread.BreakSelectWait;
 var
-  iResult: Integer;
+  //iResult: Integer;
   LAddr: TSockAddrIn6;
 begin
+  if FTempHandle = 0 then Exit;
+
   FillChar(LAddr, SizeOf(LAddr), 0);
   //Id_IPv4
   with PSOCKADDR(@LAddr)^ do
@@ -915,17 +924,19 @@ begin
   //The only(?) other possibility is to make a "socket pair" and send a byte to it,
   //but this requires a dynamic server socket (which can trigger a firewall
   //exception/question popup in WindowsXP+)
-  iResult := IdWinsock2.connect(FTempHandle, PSOCKADDR(@LAddr), SIZE_TSOCKADDRIN);
+  //iResult :=
+  IdWinsock2.connect(FTempHandle, PSOCKADDR(@LAddr), SIZE_TSOCKADDRIN);
   //non blocking socket, so will always result in "would block"!
-  if (iResult <> Id_SOCKET_ERROR) or
-     ( (GStack <> nil) and (GStack.WSGetLastError <> WSAEWOULDBLOCK) )
-  then
-    GStack.CheckForSocketError(iResult);
+//  if (iResult <> Id_SOCKET_ERROR) or
+//     ( (GStack <> nil) and (GStack.WSGetLastError <> WSAEWOULDBLOCK) )
+//  then
+//    GStack.CheckForSocketError(iResult);
 end;
 
 destructor TIdWebsocketMultiReadThread.Destroy;
 begin
   IdWinsock2.closesocket(FTempHandle);
+  FTempHandle := 0;
   FChannels.Free;
   inherited;
 end;
@@ -951,7 +962,7 @@ var
   iResult: Integer;
 begin
   if GStack = nil then Exit; //finalized?
-  
+
   //alloc socket
   FTempHandle := GStack.NewSocketHandle(Id_SOCK_STREAM, Id_IPPROTO_IP, Id_IPv4, False);
   Assert(FTempHandle <> Id_INVALID_SOCKET);
@@ -963,8 +974,7 @@ end;
 
 class function TIdWebsocketMultiReadThread.Instance: TIdWebsocketMultiReadThread;
 begin
-  if (FInstance = nil) and
-     not TFinalizationHelper.ApplicationIsTerminating then
+  if (FInstance = nil) then
   begin
     FInstance := TIdWebsocketMultiReadThread.Create(True);
     FInstance.Start;
@@ -1033,7 +1043,7 @@ begin
     //ignore error during wait: socket disconnected etc
     Exit;
 
-  if Terminated then Exit;  
+  if Terminated then Exit;
 
   //some data?
   if (iResult > 0) then
@@ -1126,6 +1136,7 @@ begin
   FPendingBreak := False;
 
   IdWinsock2.closesocket(FTempHandle);
+  FTempHandle := 0;
   InitSpecialEventSocket;
 end;
 
@@ -1203,8 +1214,16 @@ class function TIdWebsocketDispatchThread.Instance: TIdWebsocketDispatchThread;
 begin
   if FInstance = nil then
   begin
-    FInstance := TIdWebsocketDispatchThread.Create(True);
-    FInstance.Start;
+    GlobalNameSpace.BeginWrite;
+    try
+      if FInstance = nil then
+      begin
+        FInstance := TIdWebsocketDispatchThread.Create(True);
+        FInstance.Start;
+      end;
+    finally
+      GlobalNameSpace.EndWrite;
+    end;
   end;
   Result := FInstance;
 end;
@@ -1231,7 +1250,8 @@ finalization
   if TIdWebsocketMultiReadThread.FInstance <> nil then
   begin
     TIdWebsocketMultiReadThread.Instance.Terminate;
-    TBaseNamedThread.WaitForThread(TIdWebsocketMultiReadThread.Instance, 5 * 1000);
+    TIdWebsocketMultiReadThread.Instance.WaitFor;
+//    TBaseNamedThread.WaitForThread(TIdWebsocketMultiReadThread.Instance, 5 * 1000);
     TIdWebsocketMultiReadThread.RemoveInstance;
   end;
 

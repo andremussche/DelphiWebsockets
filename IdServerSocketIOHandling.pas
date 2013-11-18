@@ -13,14 +13,14 @@ type
   protected
     procedure ProcessHeatbeatRequest(const AContext: TSocketIOContext; const aText: string); override;
   public
-    function  SendToAll(const aMessage: string; const aCallback: TSocketIOMsgJSON = nil): Integer;
-    procedure SendTo   (const aContext: TIdServerContext; const aMessage: string; const aCallback: TSocketIOMsgJSON = nil);
+    function  SendToAll(const aMessage: string; const aCallback: TSocketIOMsgJSON = nil; const aOnError: TSocketIOError = nil): Integer;
+    procedure SendTo   (const aContext: TIdServerContext; const aMessage: string; const aCallback: TSocketIOMsgJSON = nil; const aOnError: TSocketIOError = nil);
 
-    function  EmitEventToAll(const aEventName: string; const aData: ISuperObject; const aCallback: TSocketIOMsgJSON = nil): Integer;
+    function  EmitEventToAll(const aEventName: string; const aData: ISuperObject; const aCallback: TSocketIOMsgJSON = nil; const aOnError: TSocketIOError = nil): Integer;
     procedure EmitEventTo   (const aContext: TSocketIOContext;
-                             const aEventName: string; const aData: ISuperObject; const aCallback: TSocketIOMsgJSON = nil);overload;
+                             const aEventName: string; const aData: ISuperObject; const aCallback: TSocketIOMsgJSON = nil; const aOnError: TSocketIOError = nil);overload;
     procedure EmitEventTo   (const aContext: TIdServerContext;
-                             const aEventName: string; const aData: ISuperObject; const aCallback: TSocketIOMsgJSON = nil);overload;
+                             const aEventName: string; const aData: ISuperObject; const aCallback: TSocketIOMsgJSON = nil; const aOnError: TSocketIOError = nil);overload;
   end;
 
 implementation
@@ -32,7 +32,7 @@ uses
 
 procedure TIdServerSocketIOHandling.EmitEventTo(
   const aContext: TSocketIOContext; const aEventName: string;
-  const aData: ISuperObject; const aCallback: TSocketIOMsgJSON);
+  const aData: ISuperObject; const aCallback: TSocketIOMsgJSON; const aOnError: TSocketIOError);
 var
   jsonarray: string;
 begin
@@ -47,32 +47,32 @@ begin
     jsonarray := '[' + aData.AsString + ']';
 
   if not Assigned(aCallback) then
-    WriteSocketIOEvent(aContext, ''{no room}, aEventName, jsonarray, nil)
+    WriteSocketIOEvent(aContext, ''{no room}, aEventName, jsonarray, nil, nil)
   else
     WriteSocketIOEventRef(aContext, ''{no room}, aEventName, jsonarray,
       procedure(const aData: string)
       begin
         aCallback(aContext, SO(aData), nil);
-      end);
+      end, aOnError);
 end;
 
 procedure TIdServerSocketIOHandling.EmitEventTo(
   const aContext: TIdServerContext; const aEventName: string;
-  const aData: ISuperObject; const aCallback: TSocketIOMsgJSON);
+  const aData: ISuperObject; const aCallback: TSocketIOMsgJSON; const aOnError: TSocketIOError);
 var
   context: TSocketIOContext;
 begin
   Lock;
   try
     context := FConnections.Items[aContext];
-    EmitEventTo(context, aEventName, aData, aCallback);
+    EmitEventTo(context, aEventName, aData, aCallback, aOnError);
   finally
     UnLock;
   end;
 end;
 
 function TIdServerSocketIOHandling.EmitEventToAll(const aEventName: string; const aData: ISuperObject;
-  const aCallback: TSocketIOMsgJSON): Integer;
+  const aCallback: TSocketIOMsgJSON; const aOnError: TSocketIOError): Integer;
 var
   context: TSocketIOContext;
   jsonarray: string;
@@ -92,13 +92,13 @@ begin
       if context.IsDisconnected then Continue;
 
       if not Assigned(aCallback) then
-        WriteSocketIOEvent(context, ''{no room}, aEventName, jsonarray, nil)
+        WriteSocketIOEvent(context, ''{no room}, aEventName, jsonarray, nil, nil)
       else
         WriteSocketIOEventRef(context, ''{no room}, aEventName, jsonarray,
           procedure(const aData: string)
           begin
             aCallback(context, SO(aData), nil);
-          end);
+          end, aOnError);
       Inc(Result);
     end;
     for context in FConnectionsGUID.Values do
@@ -106,13 +106,13 @@ begin
       if context.IsDisconnected then Continue;
 
       if not Assigned(aCallback) then
-        WriteSocketIOEvent(context, ''{no room}, aEventName, jsonarray, nil)
+        WriteSocketIOEvent(context, ''{no room}, aEventName, jsonarray, nil, nil)
       else
         WriteSocketIOEventRef(context, ''{no room}, aEventName, jsonarray,
           procedure(const aData: string)
           begin
             aCallback(context, SO(aData), nil);
-          end);
+          end, aOnError);
       Inc(Result);
     end;
   finally
@@ -127,7 +127,7 @@ begin
 end;
 
 procedure TIdServerSocketIOHandling.SendTo(const aContext: TIdServerContext;
-  const aMessage: string; const aCallback: TSocketIOMsgJSON);
+  const aMessage: string; const aCallback: TSocketIOMsgJSON; const aOnError: TSocketIOError);
 var
   context: TSocketIOContext;
 begin
@@ -144,14 +144,14 @@ begin
         procedure(const aData: string)
         begin
           aCallback(context, SO(aData), nil);
-        end);
+        end, aOnError);
   finally
     UnLock;
   end;
 end;
 
 function TIdServerSocketIOHandling.SendToAll(const aMessage: string;
-  const aCallback: TSocketIOMsgJSON): Integer;
+  const aCallback: TSocketIOMsgJSON; const aOnError: TSocketIOError): Integer;
 var
   context: TSocketIOContext;
 begin
@@ -169,7 +169,7 @@ begin
           procedure(const aData: string)
           begin
             aCallback(context, SO(aData), nil);
-          end);
+          end, aOnError);
       Inc(Result);
     end;
     for context in FConnectionsGUID.Values do

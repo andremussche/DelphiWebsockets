@@ -19,6 +19,7 @@ type
   TSocketIOMsgJSON  = reference to procedure(const ASocket: ISocketIOContext; const aJSON: ISuperObject; const aCallback: TSocketIOCallbackObj);
   TSocketIONotify   = reference to procedure(const ASocket: ISocketIOContext);
   TSocketIOEvent    = reference to procedure(const ASocket: ISocketIOContext; const aArgument: TSuperArray; const aCallbackObj: TSocketIOCallbackObj);
+  TSocketIOError    = reference to procedure(const ASocket: ISocketIOContext; const aErrorClass, aErrorMessage: string);
 
   TSocketIONotifyList = class(TList<TSocketIONotify>);
   TSocketIOEventList  = class(TList<TSocketIOEvent>);
@@ -31,9 +32,9 @@ type
     function PeerIP: string;
     function PeerPort: Integer;
 
-    procedure EmitEvent(const aEventName: string; const aData: ISuperObject; const aCallback: TSocketIOMsgJSON = nil);
-    procedure Send(const aData: string; const aCallback: TSocketIOMsgJSON = nil);
-    procedure SendJSON(const aJSON: ISuperObject; const aCallback: TSocketIOMsgJSON = nil);
+    procedure EmitEvent(const aEventName: string; const aData: ISuperObject; const aCallback: TSocketIOMsgJSON = nil; const aOnError: TSocketIOError = nil);
+    procedure Send(const aData: string; const aCallback: TSocketIOMsgJSON = nil; const aOnError: TSocketIOError = nil);
+    procedure SendJSON(const aJSON: ISuperObject; const aCallback: TSocketIOMsgJSON = nil; const aOnError: TSocketIOError = nil);
   end;
 
   TSocketIOContext = class(TInterfacedObject,
@@ -78,10 +79,10 @@ type
     //todo: OnEvent per socket
     //todo: store session info per connection (see Socket.IO Set + Get -> Storing data associated to a client)
     //todo: namespace using "Of"
-    procedure EmitEvent(const aEventName: string; const aData: ISuperObject; const aCallback: TSocketIOMsgJSON = nil);
+    procedure EmitEvent(const aEventName: string; const aData: ISuperObject; const aCallback: TSocketIOMsgJSON = nil; const aOnError: TSocketIOError = nil);
 //    procedure BroadcastEventToOthers(const aEventName: string; const aData: ISuperObject; const aCallback: TSocketIOMsgJSON = nil);
-    procedure Send(const aData: string; const aCallback: TSocketIOMsgJSON = nil);
-    procedure SendJSON(const aJSON: ISuperObject; const aCallback: TSocketIOMsgJSON = nil);
+    procedure Send(const aData: string; const aCallback: TSocketIOMsgJSON = nil; const aOnError: TSocketIOError = nil);
+    procedure SendJSON(const aJSON: ISuperObject; const aCallback: TSocketIOMsgJSON = nil; const aOnError: TSocketIOError = nil);
   end;
 
   TSocketIOCallbackObj = class
@@ -91,6 +92,7 @@ type
     FMsgNr: Integer;
   public
     procedure SendResponse(const aResponse: string);
+    function  IsResponseSend: Boolean;
   end;
 
   TIdBaseSocketIOHandling = class(TIdServerBaseHandling)
@@ -113,6 +115,7 @@ type
       FSocketIOMsgNr: Integer;
       FSocketIOEventCallback: TDictionary<Integer,TSocketIOCallback>;
       FSocketIOEventCallbackRef: TDictionary<Integer,TSocketIOCallbackRef>;
+      FSocketIOErrorRef: TDictionary<Integer,TSocketIOError>;
 
     function  WriteConnect(const ASocket: TSocketIOContext): string; overload;
     procedure WriteDisConnect(const ASocket: TSocketIOContext);overload;
@@ -122,10 +125,10 @@ type
     procedure WriteDisConnect(const AContext: TIdContext);overload;
     procedure WritePing(const AContext: TIdContext);overload;
 
-    procedure WriteSocketIOMsg(const ASocket: TSocketIOContext; const aRoom, aData: string; aCallback: TSocketIOCallbackRef = nil);
-    procedure WriteSocketIOJSON(const ASocket: TSocketIOContext; const aRoom, aJSON: string; aCallback: TSocketIOCallbackRef = nil);
-    procedure WriteSocketIOEvent(const ASocket: TSocketIOContext; const aRoom, aEventName, aJSONArray: string; aCallback: TSocketIOCallback);
-    procedure WriteSocketIOEventRef(const ASocket: TSocketIOContext; const aRoom, aEventName, aJSONArray: string; aCallback: TSocketIOCallbackRef);
+    procedure WriteSocketIOMsg(const ASocket: TSocketIOContext; const aRoom, aData: string; aCallback: TSocketIOCallbackRef = nil; const aOnError: TSocketIOError = nil);
+    procedure WriteSocketIOJSON(const ASocket: TSocketIOContext; const aRoom, aJSON: string; aCallback: TSocketIOCallbackRef = nil; const aOnError: TSocketIOError = nil);
+    procedure WriteSocketIOEvent(const ASocket: TSocketIOContext; const aRoom, aEventName, aJSONArray: string; aCallback: TSocketIOCallback; const aOnError: TSocketIOError);
+    procedure WriteSocketIOEventRef(const ASocket: TSocketIOContext; const aRoom, aEventName, aJSONArray: string; aCallback: TSocketIOCallbackRef; const aOnError: TSocketIOError);
     procedure WriteSocketIOResult(const ASocket: TSocketIOContext; aRequestMsgNr: Integer; const aRoom, aData: string);
 
     procedure ProcessSocketIO_XHR(const aGUID: string; const aStrmRequest, aStrmResponse: TStream);
@@ -160,8 +163,8 @@ type
 
   TIdSocketIOHandling = class(TIdBaseSocketIOHandling)
   public
-    procedure Send(const aMessage: string; const aCallback: TSocketIOMsgJSON = nil);
-    procedure Emit(const aEventName: string; const aData: ISuperObject; const aCallback: TSocketIOMsgJSON = nil);
+    procedure Send(const aMessage: string; const aCallback: TSocketIOMsgJSON = nil; const aOnError: TSocketIOError = nil);
+    procedure Emit(const aEventName: string; const aData: ISuperObject; const aCallback: TSocketIOMsgJSON = nil; const aOnError: TSocketIOError = nil);
   end;
 
 implementation
@@ -181,6 +184,7 @@ begin
 
   FSocketIOEventCallback     := TDictionary<Integer,TSocketIOCallback>.Create;
   FSocketIOEventCallbackRef  := TDictionary<Integer,TSocketIOCallbackRef>.Create;
+  FSocketIOErrorRef          := TDictionary<Integer,TSocketIOError>.Create;
 end;
 
 destructor TIdBaseSocketIOHandling.Destroy;
@@ -189,6 +193,7 @@ var squid: string;
 begin
   FSocketIOEventCallback.Free;
   FSocketIOEventCallbackRef.Free;
+  FSocketIOErrorRef.Free;
 
   FOnEventList.Free;
   FOnConnectionList.Free;
@@ -348,7 +353,7 @@ procedure TIdBaseSocketIOHandling.ProcessCloseChannel(
 begin
   if aChannel <> '' then
     //todo: close channel
-  else
+  else if (ASocket.FContext <> nil) then
     ASocket.FContext.Connection.Disconnect;
 end;
 
@@ -576,6 +581,8 @@ var
   callback: TSocketIOCallback;
   callbackref: TSocketIOCallbackRef;
   callbackobj: TSocketIOCallbackObj;
+  errorref: TSocketIOError;
+  error: ISuperObject;
 begin
   if not FConnections.ContainsValue(ASocket) and
      not FConnectionsGUID.ContainsValue(ASocket) then
@@ -640,7 +647,15 @@ begin
           callbackobj.FHandling := Self;
           callbackobj.FSocket := ASocket;
           callbackobj.FMsgNr  := imsg;
+          try
           OnSocketIOMsg(ASocket, sdata, callbackobj); //, imsg, bCallback);
+          except
+            on E:Exception do
+            begin
+              if not callbackobj.IsResponseSend then
+                callbackobj.SendResponse( SO(['Error', SO(['Type', e.ClassName, 'Message', e.Message])]).AsJSon );
+            end;
+          end;
         finally
           callbackobj.Free;
         end
@@ -665,7 +680,15 @@ begin
           callbackobj.FHandling := Self;
           callbackobj.FSocket := ASocket;
           callbackobj.FMsgNr  := imsg;
+          try
           OnSocketIOJson(ASocket, SO(sdata), callbackobj); //, imsg, bCallback);
+          except
+            on E:Exception do
+            begin
+              if not callbackobj.IsResponseSend then
+                callbackobj.SendResponse( SO(['Error', SO(['Type', e.ClassName, 'Message', e.Message])]).AsJSon );
+            end;
+          end;
         finally
           callbackobj.Free;
         end
@@ -699,6 +722,24 @@ begin
     smsg  := Copy(sdata, 1, Pos('+', sData)-1);
     imsg  := StrToIntDef(smsg, 0);
     sData := Copy(sdata, Pos('+', sData)+1, Length(sData));
+
+    if FSocketIOErrorRef.TryGetValue(imsg, errorref) then
+    begin
+      FSocketIOErrorRef.Remove(imsg);
+      //'[{"Error":{"Message":"Operation aborted","Type":"EAbort"}}]'
+      if ContainsText(sdata, '{"Error":') then
+      begin
+        error := SO(sdata);
+        if error.IsType(stArray) then
+          error := error.O['0'];
+        error := error.O['Error'];
+        if error.S['Message'] <> '' then
+          errorref(ASocket, error.S['Type'], error.S['Message'])
+        else
+          errorref(ASocket, 'Unknown', sdata);
+        Exit;
+      end;
+    end;
 
     if FSocketIOEventCallback.TryGetValue(imsg, callback) then
     begin
@@ -782,7 +823,7 @@ begin
 end;
 
 procedure TIdBaseSocketIOHandling.WriteSocketIOEvent(const ASocket: TSocketIOContext; const aRoom, aEventName,
-  aJSONArray: string; aCallback: TSocketIOCallback);
+  aJSONArray: string; aCallback: TSocketIOCallback; const aOnError: TSocketIOError);
 var
   sresult: string;
 begin
@@ -799,12 +840,15 @@ begin
     sresult := Format('5:%d+:%s:{"name":"%s", "args":%s}',
                       [FSocketIOMsgNr, aRoom, aEventName, aJSONArray]);
     FSocketIOEventCallback.Add(FSocketIOMsgNr, aCallback);
+
+    if Assigned(aOnError) then
+      FSocketIOErrorRef.Add(FSocketIOMsgNr, aOnError);
   end;
   WriteString(ASocket, sresult);
 end;
 
 procedure TIdBaseSocketIOHandling.WriteSocketIOEventRef(const ASocket: TSocketIOContext;
-  const aRoom, aEventName, aJSONArray: string; aCallback: TSocketIOCallbackRef);
+  const aRoom, aEventName, aJSONArray: string; aCallback: TSocketIOCallbackRef; const aOnError: TSocketIOError);
 var
   sresult: string;
 begin
@@ -821,12 +865,15 @@ begin
     sresult := Format('5:%d+:%s:{"name":"%s", "args":%s}',
                       [FSocketIOMsgNr, aRoom, aEventName, aJSONArray]);
     FSocketIOEventCallbackRef.Add(FSocketIOMsgNr, aCallback);
+
+    if Assigned(aOnError) then
+      FSocketIOErrorRef.Add(FSocketIOMsgNr, aOnError);
   end;
   WriteString(ASocket, sresult);
 end;
 
 procedure TIdBaseSocketIOHandling.WriteSocketIOJSON(const ASocket: TSocketIOContext;
-  const aRoom, aJSON: string; aCallback: TSocketIOCallbackRef = nil);
+  const aRoom, aJSON: string; aCallback: TSocketIOCallbackRef = nil; const aOnError: TSocketIOError = nil);
 var
   sresult: string;
 begin
@@ -843,13 +890,16 @@ begin
     sresult := Format('4:%d+:%s:%s',
                       [FSocketIOMsgNr, aRoom, aJSON]);
     FSocketIOEventCallbackRef.Add(FSocketIOMsgNr, aCallback);
+
+    if Assigned(aOnError) then
+      FSocketIOErrorRef.Add(FSocketIOMsgNr, aOnError);
   end;
 
   WriteString(ASocket, sresult);
 end;
 
 procedure TIdBaseSocketIOHandling.WriteSocketIOMsg(const ASocket: TSocketIOContext;
-  const aRoom, aData: string; aCallback: TSocketIOCallbackRef = nil);
+  const aRoom, aData: string; aCallback: TSocketIOCallbackRef = nil; const aOnError: TSocketIOError = nil);
 var
   sresult: string;
 begin
@@ -866,6 +916,9 @@ begin
     sresult := Format('3:%d+:%s:%s',
                       [FSocketIOMsgNr, aRoom, aData]);
     FSocketIOEventCallbackRef.Add(FSocketIOMsgNr, aCallback);
+
+    if Assigned(aOnError) then
+      FSocketIOErrorRef.Add(FSocketIOMsgNr, aOnError);
   end;
 
   WriteString(ASocket, sresult);
@@ -896,7 +949,7 @@ begin
 
     if (ASocket.FIOHandler <> nil) then
     begin
-      Assert(ASocket.FIOHandler.IsWebsocket);
+      //Assert(ASocket.FIOHandler.IsWebsocket);
       if DebugHook <> 0 then
         Windows.OutputDebugString(PChar('Send: ' + aText));
       ASocket.FIOHandler.Write(aText);
@@ -915,9 +968,15 @@ end;
 
 { TSocketIOCallbackObj }
 
+function TSocketIOCallbackObj.IsResponseSend: Boolean;
+begin
+  Result := (FMsgNr < 0);
+end;
+
 procedure TSocketIOCallbackObj.SendResponse(const aResponse: string);
 begin
   FHandling.WriteSocketIOResult(FSocket, FMsgNr, '', aResponse);
+  FMsgNr := -1;
 end;
 
 { TSocketIOContext }
@@ -940,17 +999,17 @@ begin
 end;
 
 procedure TSocketIOContext.EmitEvent(const aEventName: string; const aData: ISuperObject;
-  const aCallback: TSocketIOMsgJSON);
+  const aCallback: TSocketIOMsgJSON; const aOnError: TSocketIOError);
 begin
   if not Assigned(aCallback) then
-    FHandling.WriteSocketIOEvent(Self, '', aEventName, aData.AsJSon, nil)
+    FHandling.WriteSocketIOEvent(Self, '', aEventName, aData.AsJSon, nil, nil)
   else
   begin
     FHandling.WriteSocketIOEventRef(Self, '', aEventName, aData.AsJSon,
       procedure(const aData: string)
       begin
         aCallback(Self, SO(aData), nil);
-      end);
+      end, aOnError);
   end;
 end;
 
@@ -1007,7 +1066,7 @@ begin
 end;
 
 procedure TSocketIOContext.Send(const aData: string;
-  const aCallback: TSocketIOMsgJSON);
+  const aCallback: TSocketIOMsgJSON; const aOnError: TSocketIOError);
 begin
   if not Assigned(aCallback) then
     FHandling.WriteSocketIOMsg(Self, '', aData)
@@ -1017,12 +1076,12 @@ begin
       procedure(const aData: string)
       begin
         aCallback(Self, SO(aData), nil);
-      end);
+      end, aOnError);
   end;
 end;
 
 procedure TSocketIOContext.SendJSON(const aJSON: ISuperObject;
-  const aCallback: TSocketIOMsgJSON);
+  const aCallback: TSocketIOMsgJSON; const aOnError: TSocketIOError);
 begin
   if not Assigned(aCallback) then
     FHandling.WriteSocketIOJSON(Self, '', aJSON.AsJSon())
@@ -1032,7 +1091,7 @@ begin
       procedure(const aData: string)
       begin
         aCallback(Self, SO(aData), nil);
-      end);
+      end, aOnError);
   end;
 end;
 
@@ -1131,7 +1190,7 @@ end;
 { TIdSocketIOHandling }
 
 procedure TIdSocketIOHandling.Emit(const aEventName: string;
-  const aData: ISuperObject; const aCallback: TSocketIOMsgJSON);
+  const aData: ISuperObject; const aCallback: TSocketIOMsgJSON; const aOnError: TSocketIOError);
 var
   context: TSocketIOContext;
   jsonarray: string;
@@ -1154,13 +1213,13 @@ begin
       if context.IsDisconnected then Continue;
 
       if not Assigned(aCallback) then
-        WriteSocketIOEvent(context, ''{no room}, aEventName, jsonarray, nil)
+        WriteSocketIOEvent(context, ''{no room}, aEventName, jsonarray, nil, nil)
       else
         WriteSocketIOEventRef(context, ''{no room}, aEventName, jsonarray,
           procedure(const aData: string)
           begin
             aCallback(context, SO(aData), nil);
-          end);
+          end, aOnError);
       Inc(isendcount);
     end;
     for context in FConnectionsGUID.Values do
@@ -1168,13 +1227,13 @@ begin
       if context.IsDisconnected then Continue;
 
       if not Assigned(aCallback) then
-        WriteSocketIOEvent(context, ''{no room}, aEventName, jsonarray, nil)
+        WriteSocketIOEvent(context, ''{no room}, aEventName, jsonarray, nil, nil)
       else
         WriteSocketIOEventRef(context, ''{no room}, aEventName, jsonarray,
           procedure(const aData: string)
           begin
             aCallback(context, SO(aData), nil);
-          end);
+          end, aOnError);
       Inc(isendcount);
     end;
 
@@ -1186,7 +1245,7 @@ begin
 end;
 
 procedure TIdSocketIOHandling.Send(const aMessage: string;
-  const aCallback: TSocketIOMsgJSON);
+  const aCallback: TSocketIOMsgJSON; const aOnError: TSocketIOError);
 var
   context: TSocketIOContext;
   isendcount: Integer;
@@ -1209,7 +1268,7 @@ begin
           procedure(const aData: string)
           begin
             aCallback(context, SO(aData), nil);
-          end);
+          end, aOnError);
       Inc(isendcount);
     end;
     for context in FConnectionsGUID.Values do
@@ -1225,7 +1284,7 @@ begin
           procedure(const aData: string)
           begin
             aCallback(context, SO(aData), nil);
-          end);
+          end, aOnError);
       Inc(isendcount);
     end;
 
