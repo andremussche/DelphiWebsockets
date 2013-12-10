@@ -6094,7 +6094,7 @@ function TSuperRttiContext.FromJson(TypeInfo: PTypeInfo; const obj: ISuperObject
     begin
       if ObjectIsType(obj, stObject) and (f.FieldType <> nil) then
       begin
-        p := IValueData(TValueData(Value).FHeapData).GetReferenceToRawData;
+        p := IValueData(TValueData(Value).FValueData).GetReferenceToRawData;
         Result := FromJson(f.FieldType.Handle, GetFieldDefault(f, obj.AsObject[GetFieldName(f)]), v);
         if Result then
           f.SetValue(p, v) else
@@ -6408,7 +6408,7 @@ function TSuperRttiContext.ToJson(var value: TValue; const index: ISuperObject):
     Result := TSuperObject.Create(stObject);
     for f in Context.GetType(Value.TypeInfo).GetFields do
     begin
-      v := f.GetValue(IValueData(TValueData(Value).FHeapData).GetReferenceToRawData);
+      v := f.GetValue(IValueData(TValueData(Value).FValueData).GetReferenceToRawData);
       Result.AsObject[GetFieldName(f)] := ToJson(v, index);
     end;
   end;
@@ -6483,8 +6483,8 @@ function TSuperRttiContext.ToJson(var value: TValue; const index: ISuperObject):
 
   procedure ToInterface;
   begin
-    if TValueData(Value).FHeapData <> nil then
-      TValueData(Value).FHeapData.QueryInterface(ISuperObject, Result) else
+    if TValueData(Value).FValueData <> nil then
+      TValueData(Value).FValueData.QueryInterface(ISuperObject, Result) else
       Result := nil;
   end;
 
