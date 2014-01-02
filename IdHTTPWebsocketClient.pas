@@ -55,6 +55,9 @@ type
 
     function  TryUpgradeToWebsocket: Boolean;
     procedure UpgradeToWebsocket;
+
+    procedure Connect; override;
+    function  TryConnect: Boolean;
     procedure Disconnect(ANotifyPeer: Boolean); override;
 
     property  IOHandler: TIdIOHandlerWebsocket read GetIOHandlerWS write SetIOHandlerWS;
@@ -234,6 +237,12 @@ begin
     end);
 end;
 
+procedure TIdHTTPWebsocketClient.Connect;
+begin
+  FHeartBeat.Enabled := True;
+  inherited Connect;
+end;
+
 destructor TIdHTTPWebsocketClient.Destroy;
 var tmr: TObject;
 begin
@@ -340,6 +349,20 @@ begin
     FSocketIO.UnLock;
     FHeartBeat.Enabled := True;  //always enable: in case of disconnect it will re-connect
   end;
+end;
+
+function TIdHTTPWebsocketClient.TryConnect: Boolean;
+begin
+  try
+    if Connected then Exit(True);
+
+    Connect;
+    Result := Connected;
+    if Result and SocketIOCompatible then
+      Result := TryUpgradeToWebsocket;
+  except
+    Result := False;
+  end
 end;
 
 function TIdHTTPWebsocketClient.TryUpgradeToWebsocket: Boolean;
