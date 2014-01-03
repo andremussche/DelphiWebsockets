@@ -27,6 +27,7 @@ type
     FWSInputBuffer: TIdBuffer;
     FExtensionBits: TWSExtensionBits;
     FLock: TCriticalSection;
+    FSelectLock: TCriticalSection;
     FCloseReason: string;
     FCloseCode: Integer;
     FClosing: Boolean;
@@ -55,6 +56,9 @@ type
     procedure Lock;
     procedure Unlock;
     function  TryLock: Boolean;
+
+    function  Readable(AMSec: Integer = IdTimeoutDefault): Boolean; override;
+    function  Connected: Boolean; override;
 
     procedure Close; override;
     property  Closing    : Boolean read FClosing;
@@ -143,6 +147,7 @@ begin
   FMessageStream := TMemoryStream.Create;
   FWSInputBuffer := TIdBuffer.Create;
   FLock := TCriticalSection.Create;
+  FSelectLock := TCriticalSection.Create;
 end;
 
 procedure TIdIOHandlerWebsocket.Close;
@@ -217,10 +222,17 @@ begin
   inherited Close;
 end;
 
+function TIdIOHandlerWebsocket.Connected: Boolean;
+begin
+  Result := inherited Connected;
+end;
+
 destructor TIdIOHandlerWebsocket.Destroy;
 begin
   FLock.Enter;
+  FSelectLock.Enter;
   FLock.Free;
+  FSelectLock.Free;
 
   FWSInputBuffer.Free;
   FMessageStream.Free;
@@ -230,6 +242,7 @@ end;
 function TIdIOHandlerWebsocket.InternalReadDataFromSource(
   var VBuffer: TIdBytes; ARaiseExceptionOnTimeout: Boolean): Integer;
 begin
+  Result := -1;
   SetLength(VBuffer, 0);
 
   CheckForDisconnect;
@@ -336,6 +349,16 @@ begin
       Raise;
     end;
     Unlock;  //normal unlock (no double try finally)
+  end;
+end;
+
+function TIdIOHandlerWebsocket.Readable(AMSec: Integer): Boolean;
+begin
+  if not FSelectLock.TryEnter then Exit(False);
+  try
+    Result := inherited Readable(AMSec);
+  finally
+    FSelectLock.Leave;
   end;
 end;
 
@@ -510,19 +533,25 @@ begin
 end;
 
 function TIdIOHandlerWebsocket.ReadFrame(out aFIN, aRSV1, aRSV2, aRSV3: boolean;
-                                               out aDataCode: TWSDataCode; out aData: TIdBytes): Integer;
+                                         out aDataCode: TWSDataCode; out aData: TIdBytes): Integer;
 var
   iInputPos: NativeInt;
 
-  function _GetByte: Byte;
+  function _WaitByte(ARaiseExceptionOnTimeout: Boolean): Boolean;
   var
     temp: TIdBytes;
+  begin
+    Result := InternalReadDataFromSource(temp, ARaiseExceptionOnTimeout) > 0;
+    if Result then
+      FWSInputBuffer.Write(temp);
+  end;
+
+  function _GetByte: Byte;
   begin
     while FWSInputBuffer.Size <= iInputPos do
     begin
       //FWSInputBuffer.AsString;
-      InternalReadDataFromSource(temp, True); 
-      FWSInputBuffer.Write(temp);
+      _WaitByte(True);
       if FWSInputBuffer.Size <= iInputPos then
         Sleep(1);
     end;
@@ -560,8 +589,12 @@ var
   end;
 begin
   iInputPos := 0;
-  SetLength(aData, 0);
+  Result := 0;
+  aFIN := False; aRSV1 := False; aRSV2:= False; aRSV3:= False;
   aDataCode := wdcNone;
+  SetLength(aData, 0);
+
+  if not _WaitByte(False) then Exit;
 
   //wait + process data
   iByte := _GetByte;
