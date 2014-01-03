@@ -594,6 +594,8 @@ begin
 //      end
 //      else
 //        FSocketIOContext.Create(Self); //update with new iohandler etc
+
+      (FSocketIOContext as TSocketIOContext).ConnectSend := True;  //connect already send via url? GET /socket.io/1/websocket/9elrbEFqiimV29QAM6T-
       FSocketIO.WriteConnect(FSocketIOContext as TSocketIOContext);
     end;
 

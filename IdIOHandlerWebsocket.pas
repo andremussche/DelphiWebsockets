@@ -259,7 +259,7 @@ begin
     if ARaiseExceptionOnTimeout then
       EIdReadTimeout.Toss(RSIdNoDataToRead)  //exit, no data can be received
     else
-      Exit;
+      Exit(0);
   end;
 
   SetLength(VBuffer, RecvBufferSize);

@@ -18,7 +18,9 @@ type
     FSocketIO: TIdServerSocketIOHandling_Ext;
     function GetSocketIO: TIdServerSocketIOHandling;
   protected
+    FROTransportContexts: TInterfaceList;
     procedure InternalServerConnect(AThread: TIdContext); override;
+    procedure InternalServerDisConnect(AThread: TIdContext); virtual;
     procedure InternalServerCommandGet(AThread: TIdThreadClass;
       ARequestInfo: TIdHTTPRequestInfo; AResponseInfo: TIdHTTPResponseInfo); override;
     procedure ProcessRemObjectsRequest(const AThread: TIdContext; const strmRequest: TMemoryStream; const strmResponse: TMemoryStream);
@@ -87,16 +89,19 @@ begin
   inherited;
 
   FSocketIO := TIdServerSocketIOHandling_Ext.Create;
+  FROTransportContexts := TInterfaceList.Create;
 
   IndyServer.ContextClass := TROIdServerWSContext;
   if Self.IndyServer.IOHandler = nil then
     IndyServer.IOHandler := TIdServerIOHandlerWebsocket.Create(Self);
+  IndyServer.OnDisconnect := InternalServerDisConnect;
 end;
 
 destructor TROIndyHTTPWebsocketServer.Destroy;
 begin
   inherited;
   FSocketIO.Free;
+  FROTransportContexts.Free;
 end;
 
 function TROIndyHTTPWebsocketServer.GetDispatchersClass: TROMessageDispatchersClass;
@@ -120,11 +125,24 @@ begin
     inherited InternalServerCommandGet(AThread, ARequestInfo, AResponseInfo)
 end;
 
-procedure TROIndyHTTPWebsocketServer.InternalServerConnect(AThread: TIdContext);
+
+procedure TROIndyHTTPWebsocketServer.InternalServerConnect(AThread: TIdContext);
 begin
   inherited;
   (AThread as TIdServerWSContext).OnCustomChannelExecute := Self.OnCustomChannelExecute;
   (AThread as TROIdServerWSContext).OnRemObjectsRequest  := Self.ProcessRemObjectsRequest;
+end;
+
+procedure TROIndyHTTPWebsocketServer.InternalServerDisConnect(
+  AThread: TIdContext);
+var
+  transport: TROTransportContext;
+begin
+  transport := AThread.Data as TROTransportContext;
+  if transport <> nil then
+    FROTransportContexts.Remove(transport);
+  //transport._Release;
+  AThread.Data := nil;
 end;
 
 procedure TROIndyHTTPWebsocketServer.Loaded;
@@ -159,7 +177,8 @@ begin
   begin
     //create IROTransport object
     transport := TROTransportContext.Create(Self, AThread as TIdServerWSContext);
-    (transport as IROTransport)._AddRef;
+    //(transport as IROTransport)._AddRef;
+    FROTransportContexts.Add(transport);
     //attach RO transport to indy context
     AThread.Data := transport;
     //todo: enveloppes

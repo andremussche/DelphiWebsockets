@@ -584,6 +584,8 @@ var
   errorref: TSocketIOError;
   error: ISuperObject;
 begin
+  if ASocket = nil then Exit;
+
   if not FConnections.ContainsValue(ASocket) and
      not FConnectionsGUID.ContainsValue(ASocket) then
   begin
@@ -1265,8 +1267,6 @@ begin
     for context in FConnections.Values do
     begin
       if context.IsDisconnected then Continue;
-//      if not context.IsSocketIO then
-//        raise EIdSocketIoUnhandledMessage.Create('Not a socket.io connection!');
 
       if not Assigned(aCallback) then
         WriteSocketIOMsg(context, ''{no room}, aMessage, nil)
@@ -1281,8 +1281,6 @@ begin
     for context in FConnectionsGUID.Values do
     begin
       if context.IsDisconnected then Continue;
-//      if not context.IsSocketIO then
-//        raise EIdSocketIoUnhandledMessage.Create('Not a socket.io connection!');
 
       if not Assigned(aCallback) then
         WriteSocketIOMsg(context, ''{no room}, aMessage, nil)
