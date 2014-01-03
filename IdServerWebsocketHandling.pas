@@ -30,7 +30,8 @@ type
 implementation
 
 uses
-  StrUtils, SysUtils, IdCustomTCPServer, IdCoderMIME;
+  StrUtils, SysUtils, DateUtils,
+  IdCustomTCPServer, IdCoderMIME;
 
 { TIdServerWebsocketHandling }
 
@@ -40,6 +41,7 @@ var
   wscode: TWSDataCode;
   wstype: TWSDataType;
   context: TIdServerWSContext;
+  tstart: TDateTime;
 begin
   context   := nil;
   try
@@ -58,11 +60,15 @@ begin
     end;
     //AThread.Connection.Socket.UseNagle := False;
 
+    tstart := Now;
+
     while AThread.Connection.Connected do
     begin
       if (AThread.Connection.IOHandler.InputBuffer.Size > 0) or
-         AThread.Connection.IOHandler.Readable(5 * 1000) then     //wait 5s, else ping the client(!)
+         AThread.Connection.IOHandler.Readable(1 * 1000) then     //wait 5s, else ping the client(!)
       begin
+        tstart := Now;
+
         strmResponse := TMemoryStream.Create;
         strmRequest  := TMemoryStream.Create;
         try
@@ -104,8 +110,10 @@ begin
           strmResponse.Free;
         end;
       end
-      else
+      //ping after 5s idle
+      else if SecondsBetween(Now, tstart) > 5 then
       begin
+        tstart := Now;
         //ping
         if context.IsSocketIO then
         begin
@@ -193,8 +201,8 @@ begin
       AResponseInfo.ContentText  := squid +
                                     ':15:10:websocket,xhr-polling';
       AResponseInfo.CloseConnection := False;
-      //(AThread.SocketIO as TIdServerSocketIOHandling_Ext).NewConnection(AThread);
-      (AThread.SocketIO as TIdServerSocketIOHandling_Ext).NewConnection(squid, AThread.Binding.PeerIP);
+      (AThread.SocketIO as TIdServerSocketIOHandling_Ext).NewConnection(AThread);
+      //(AThread.SocketIO as TIdServerSocketIOHandling_Ext).NewConnection(squid, AThread.Binding.PeerIP);
 
       Result := True;  //handled
     end
