@@ -600,6 +600,8 @@ begin
   if str = '' then Exit;
   if DebugHook <> 0 then
     Windows.OutputDebugString(PChar('Received: ' + str));
+  while str[1] = #0 do
+    Delete(str, 1, 1);
 
   //5:1+:/chat:test
   smsg      := __GetSocketIOPart(str, 1);
@@ -826,23 +828,24 @@ procedure TIdBaseSocketIOHandling.WriteSocketIOEvent(const ASocket: TSocketIOCon
   aJSONArray: string; aCallback: TSocketIOCallback; const aOnError: TSocketIOError);
 var
   sresult: string;
+  inr: Integer;
 begin
   //see TROIndyHTTPWebsocketServer.ProcessSocketIORequest too
   //5:1+:/chat:{"name":"GetLocations","args":[""]}
-  Inc(FSocketIOMsgNr);
+  inr := InterlockedIncrement(FSocketIOMsgNr);
   if not Assigned(aCallback) then
     sresult := Format('5:%d:%s:{"name":"%s", "args":%s}',
-                      [FSocketIOMsgNr, aRoom, aEventName, aJSONArray])
+                      [inr, aRoom, aEventName, aJSONArray])
   else
   begin
     if FSocketIOEventCallback = nil then
       FSocketIOEventCallback := TDictionary<Integer,TSocketIOCallback>.Create;
     sresult := Format('5:%d+:%s:{"name":"%s", "args":%s}',
-                      [FSocketIOMsgNr, aRoom, aEventName, aJSONArray]);
-    FSocketIOEventCallback.Add(FSocketIOMsgNr, aCallback);
+                      [inr, aRoom, aEventName, aJSONArray]);
+    FSocketIOEventCallback.Add(inr, aCallback);
 
     if Assigned(aOnError) then
-      FSocketIOErrorRef.Add(FSocketIOMsgNr, aOnError);
+      FSocketIOErrorRef.Add(inr, aOnError);
   end;
   WriteString(ASocket, sresult);
 end;
@@ -851,23 +854,24 @@ procedure TIdBaseSocketIOHandling.WriteSocketIOEventRef(const ASocket: TSocketIO
   const aRoom, aEventName, aJSONArray: string; aCallback: TSocketIOCallbackRef; const aOnError: TSocketIOError);
 var
   sresult: string;
+  inr: Integer;
 begin
   //see TROIndyHTTPWebsocketServer.ProcessSocketIORequest too
   //5:1+:/chat:{"name":"GetLocations","args":[""]}
-  Inc(FSocketIOMsgNr);
+  inr := InterlockedIncrement(FSocketIOMsgNr);
   if not Assigned(aCallback) then
     sresult := Format('5:%d:%s:{"name":"%s", "args":%s}',
-                      [FSocketIOMsgNr, aRoom, aEventName, aJSONArray])
+                      [inr, aRoom, aEventName, aJSONArray])
   else
   begin
     if FSocketIOEventCallbackRef = nil then
       FSocketIOEventCallbackRef := TDictionary<Integer,TSocketIOCallbackRef>.Create;
     sresult := Format('5:%d+:%s:{"name":"%s", "args":%s}',
-                      [FSocketIOMsgNr, aRoom, aEventName, aJSONArray]);
-    FSocketIOEventCallbackRef.Add(FSocketIOMsgNr, aCallback);
+                      [inr, aRoom, aEventName, aJSONArray]);
+    FSocketIOEventCallbackRef.Add(inr, aCallback);
 
     if Assigned(aOnError) then
-      FSocketIOErrorRef.Add(FSocketIOMsgNr, aOnError);
+      FSocketIOErrorRef.Add(inr, aOnError);
   end;
   WriteString(ASocket, sresult);
 end;
@@ -876,23 +880,24 @@ procedure TIdBaseSocketIOHandling.WriteSocketIOJSON(const ASocket: TSocketIOCont
   const aRoom, aJSON: string; aCallback: TSocketIOCallbackRef = nil; const aOnError: TSocketIOError = nil);
 var
   sresult: string;
+  inr: Integer;
 begin
   //see TROIndyHTTPWebsocketServer.ProcessSocketIORequest too
   //4:1::{"a":"b"}
-  Inc(FSocketIOMsgNr);
+  inr := InterlockedIncrement(FSocketIOMsgNr);
 
   if not Assigned(aCallback) then
-    sresult := Format('4:%d:%s:%s', [FSocketIOMsgNr, aRoom, aJSON])
+    sresult := Format('4:%d:%s:%s', [inr, aRoom, aJSON])
   else
   begin
     if FSocketIOEventCallbackRef = nil then
       FSocketIOEventCallbackRef := TDictionary<Integer,TSocketIOCallbackRef>.Create;
     sresult := Format('4:%d+:%s:%s',
-                      [FSocketIOMsgNr, aRoom, aJSON]);
-    FSocketIOEventCallbackRef.Add(FSocketIOMsgNr, aCallback);
+                      [inr, aRoom, aJSON]);
+    FSocketIOEventCallbackRef.Add(inr, aCallback);
 
     if Assigned(aOnError) then
-      FSocketIOErrorRef.Add(FSocketIOMsgNr, aOnError);
+      FSocketIOErrorRef.Add(inr, aOnError);
   end;
 
   WriteString(ASocket, sresult);
@@ -902,23 +907,24 @@ procedure TIdBaseSocketIOHandling.WriteSocketIOMsg(const ASocket: TSocketIOConte
   const aRoom, aData: string; aCallback: TSocketIOCallbackRef = nil; const aOnError: TSocketIOError = nil);
 var
   sresult: string;
+  inr: Integer;
 begin
   //see TROIndyHTTPWebsocketServer.ProcessSocketIORequest too
   //3::/chat:hi
-  Inc(FSocketIOMsgNr);
+  inr := InterlockedIncrement(FSocketIOMsgNr);
 
   if not Assigned(aCallback) then
-    sresult := Format('3:%d:%s:%s', [FSocketIOMsgNr, aRoom, aData])
+    sresult := Format('3:%d:%s:%s', [inr, aRoom, aData])
   else
   begin
     if FSocketIOEventCallbackRef = nil then
       FSocketIOEventCallbackRef := TDictionary<Integer,TSocketIOCallbackRef>.Create;
     sresult := Format('3:%d+:%s:%s',
-                      [FSocketIOMsgNr, aRoom, aData]);
-    FSocketIOEventCallbackRef.Add(FSocketIOMsgNr, aCallback);
+                      [inr, aRoom, aData]);
+    FSocketIOEventCallbackRef.Add(inr, aCallback);
 
     if Assigned(aOnError) then
-      FSocketIOErrorRef.Add(FSocketIOMsgNr, aOnError);
+      FSocketIOErrorRef.Add(inr, aOnError);
   end;
 
   WriteString(ASocket, sresult);
@@ -993,6 +999,7 @@ end;
 
 destructor TSocketIOContext.Destroy;
 begin
+  Lock;
   FEvent.Free;
   FQueue.Free;
   inherited;

@@ -81,6 +81,8 @@
 {$DEFINE WINDOWSNT_COMPATIBILITY}
 {.$DEFINE DEBUG} // track memory leack
 
+{$DEFINE VER210}
+
 unit superobject;
 
 interface
