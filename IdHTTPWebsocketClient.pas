@@ -8,10 +8,17 @@ uses
   {$IF CompilerVersion <= 21.0}  //D2010
   IdHashSHA1,
   {$else}
+  Types,
   IdHashSHA,                     //XE3 etc
   {$IFEND}
   IdIOHandler,
-  IdIOHandlerWebsocket, ExtCtrls, IdWinsock2, Generics.Collections, SyncObjs,
+  IdIOHandlerWebsocket,
+  {$ifdef FMX}
+  FMX.Types,
+  {$ELSE}
+  ExtCtrls,
+  {$ENDIF}
+  IdWinsock2, Generics.Collections, SyncObjs,
   IdSocketIOHandling;
 
 type
@@ -225,6 +232,8 @@ end;
 
 procedure TIdHTTPWebsocketClient.AsyncDispatchEvent(const aEvent: string);
 begin
+  OutputDebugString(PChar('AsyncDispatchEvent: ' + aEvent) );
+
   //if not Assigned(OnTextData) then Exit;
   //events during dispatch? channel is busy so offload event dispatching to different thread!
   TIdWebsocketDispatchThread.Instance.QueueEvent(
@@ -311,10 +320,11 @@ begin
     try
       if (IOHandler <> nil) and
          not IOHandler.ClosedGracefully and
-         IOHandler.Connected and
+         //IOHandler.Connected and
          (FSocketIOContext <> nil) then
       begin
-        FSocketIO.WritePing(FSocketIOContext as TSocketIOContext);  //heartbeat socket.io message
+        //not threadsafe because of background ReadAllThreads?
+        //FSocketIO.WritePing(FSocketIOContext as TSocketIOContext);  //heartbeat socket.io message
       end
       //retry re-connect
       else
@@ -330,19 +340,24 @@ begin
       except
         //skip, just retried
       end;
-    except
-      //clear inputbuffer, otherwise it stays connected :(
-      if (IOHandler <> nil) and
-         not IOHandler.InputBufferIsEmpty
-      then
-        IOHandler.DiscardAll;
+    except on E:Exception do
+      begin
+        //clear inputbuffer, otherwise it stays connected :(
+        if (IOHandler <> nil) and
+           not IOHandler.InputBufferIsEmpty
+        then
+          IOHandler.DiscardAll;
+        Disconnect(False);
 
-      if Assigned(OnDisConnected) then
-        OnDisConnected(Self);
-      try
-        raise EIdException.Create('Connection lost from ' + Format('ws://%s:%d/%s', [Host, Port, WSResourceName]));
-      except
-        //eat, no error popup!
+        if Assigned(OnDisConnected) then
+          OnDisConnected(Self);
+        try
+          raise EIdException.Create('Connection lost from ' +
+                                    Format('ws://%s:%d/%s', [Host, Port, WSResourceName]) +
+                                    ' - Error: ' + e.Message);
+        except
+          //eat, no error popup!
+        end;
       end;
     end;
   finally
@@ -513,7 +528,7 @@ begin
       TThread.Queue(nil,
         procedure
         begin
-          FHeartBeat.Interval := 5 * 1000;
+          FHeartBeat.Interval := 2 * 1000;
           FHeartBeat.Enabled  := True;
         end);
     end
@@ -570,10 +585,6 @@ begin
     IOHandler.IsWebsocket := True;
     aFailedReason := '';
 
-    //always read the data! (e.g. RO use override of AsyncDispatchEvent to process data)
-    //if Assigned(OnBinData) or Assigned(OnTextData) then
-    TIdWebsocketMultiReadThread.Instance.AddClient(Self);
-
     if SocketIOCompatible then
     begin
 //      if FSocketIOContext = nil then
@@ -585,6 +596,10 @@ begin
 //        FSocketIOContext.Create(Self); //update with new iohandler etc
       FSocketIO.WriteConnect(FSocketIOContext as TSocketIOContext);
     end;
+
+    //always read the data! (e.g. RO use override of AsyncDispatchEvent to process data)
+    //if Assigned(OnBinData) or Assigned(OnTextData) then
+    TIdWebsocketMultiReadThread.Instance.AddClient(Self);
   finally
     Request.Clear;
     strmResponse.Free;
@@ -1019,7 +1034,8 @@ var
 begin
   l := FChannels.LockList;
   try
-    iCount := 0;
+    iCount  := 0;
+    iResult := 0;
     Freadset.fd_count := iCount;
 
     for i := 0 to l.Count - 1 do
@@ -1030,9 +1046,22 @@ begin
          (chn.Socket.Binding.Handle > 0) and
          (chn.Socket.Binding.Handle <> INVALID_SOCKET) then
       begin
-        Freadset.fd_count         := iCount+1;
-        Freadset.fd_array[iCount] := chn.Socket.Binding.Handle;
-        Inc(iCount);
+//        if chn.IOHandler.TryLock then
+//        try
+
+          //todo: seperate read thread is needed because of threadsafety
+          if chn.IOHandler.Readable( 1000 div l.Count ) then
+          begin
+            Inc(iResult);
+            Break;
+          end;
+//        finally
+//          chn.IOHandler.Unlock;
+//        end;
+
+//        Freadset.fd_count         := iCount+1;
+//        Freadset.fd_array[iCount] := chn.Socket.Binding.Handle;
+//        Inc(iCount);
       end;
     end;
 
@@ -1050,6 +1079,7 @@ begin
   Finterval.tv_sec  := 15; //15s
   Finterval.tv_usec := 0;
 
+  {
   //nothing to wait for? then sleep some time to prevent 100% CPU
   if iCount = 0 then
   begin
@@ -1065,7 +1095,7 @@ begin
     //raise EIdWinsockStubError.Build(WSAGetLastError, '', []);
     //ignore error during wait: socket disconnected etc
     Exit;
-
+  }
   if Terminated then Exit;
 
   //some data?
@@ -1119,7 +1149,9 @@ begin
                   chn.AsyncDispatchEvent(string(swstext));
                 end;
               end;
-            end;
+            end
+            else
+              sleep(1);
           end;
         except
           l := nil;
@@ -1136,7 +1168,9 @@ begin
         FChannels.UnlockList;
       strmEvent.Free;
     end;
-  end;
+  end
+  else
+    Sleep(10);
 end;
 
 procedure TIdWebsocketMultiReadThread.RemoveClient(
@@ -1201,6 +1235,8 @@ procedure TIdWebsocketDispatchThread.Execute;
 var
   proc: Classes.TThreadProcedure;
 begin
+  TThread.NameThreadForDebugging(Self.ClassName);
+
   while not Terminated do
   begin
     try
