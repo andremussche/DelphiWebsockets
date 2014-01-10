@@ -58,13 +58,15 @@ begin
       Assert(aSocketIOHandler <> nil);
       aSocketIOHandler.WriteConnect(context);
     end;
-    //AThread.Connection.Socket.UseNagle := False;
+    AThread.Connection.Socket.UseNagle := False;  //no 200ms delay!
 
     tstart := Now;
+    context := AThread as TIdServerWSContext;
 
     while AThread.Connection.Connected do
     begin
-      if (AThread.Connection.IOHandler.InputBuffer.Size > 0) or
+      if context.IOHandler.HasData or
+        (AThread.Connection.IOHandler.InputBuffer.Size > 0) or
          AThread.Connection.IOHandler.Readable(1 * 1000) then     //wait 5s, else ping the client(!)
       begin
         tstart := Now;
@@ -72,7 +74,6 @@ begin
         strmResponse := TMemoryStream.Create;
         strmRequest  := TMemoryStream.Create;
         try
-          context := AThread as TIdServerWSContext;
 
           strmRequest.Position := 0;
           //first is the type: text or bin
@@ -278,9 +279,7 @@ begin
       context.WebSocketVersion := StrToIntDef(sValue, 0);
 
       if context.WebSocketVersion < 13 then
-
         Abort;  //must be at least 13
-
     end
     else
       Abort; //must exist

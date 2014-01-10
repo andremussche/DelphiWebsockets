@@ -40,6 +40,7 @@ type
   TSocketIOContext = class(TInterfacedObject,
                            ISocketIOContext)
   private
+    FLock: TCriticalSection;
     FPingSend: Boolean;
     FConnectSend: Boolean;
     FGUID: string;
@@ -59,6 +60,7 @@ type
   public
     constructor Create();overload;
     constructor Create(aClient: TIdHTTP);overload;
+    procedure   AfterConstruction; override;
     destructor  Destroy; override;
 
     procedure Lock;
@@ -97,6 +99,7 @@ type
 
   TIdBaseSocketIOHandling = class(TIdServerBaseHandling)
   protected
+    FLock: TCriticalSection;
     FConnections: TObjectDictionary<TIdContext,TSocketIOContext>;
     FConnectionsGUID: TObjectDictionary<string,TSocketIOContext>;
 
@@ -133,8 +136,8 @@ type
 
     procedure ProcessSocketIO_XHR(const aGUID: string; const aStrmRequest, aStrmResponse: TStream);
 
-    procedure ProcessSocketIORequest(const ASocket: TSocketIOContext; const strmRequest: TMemoryStream);overload;
-    procedure ProcessSocketIORequest(const ASocket: TSocketIOContext; const aData: string);overload;
+    procedure ProcessSocketIORequest(const ASocket: ISocketIOContext; const strmRequest: TMemoryStream);overload;
+    procedure ProcessSocketIORequest(const ASocket: ISocketIOContext; const aData: string);overload;
     procedure ProcessSocketIORequest(const AContext: TIdContext; const strmRequest: TMemoryStream);overload;
 
     procedure ProcessHeatbeatRequest(const ASocket: TSocketIOContext; const aText: string);virtual;
@@ -175,6 +178,8 @@ uses
 procedure TIdBaseSocketIOHandling.AfterConstruction;
 begin
   inherited;
+  FLock := TCriticalSection.Create;
+
   FConnections      := TObjectDictionary<TIdContext,TSocketIOContext>.Create([doOwnsValues]);
   FConnectionsGUID  := TObjectDictionary<string,TSocketIOContext>.Create([doOwnsValues]);
 
@@ -191,6 +196,7 @@ destructor TIdBaseSocketIOHandling.Destroy;
 var squid: string;
     idcontext: TIdContext;
 begin
+  Lock;
   FSocketIOEventCallback.Free;
   FSocketIOEventCallbackRef.Free;
   FSocketIOErrorRef.Free;
@@ -212,8 +218,11 @@ begin
       FConnectionsGUID.ExtractPair(squid);
     end;
   FConnections.Free;
+  FConnections := nil;
   FConnectionsGUID.Free;
 
+  UnLock;
+  FLock.Free;
   inherited;
 end;
 
@@ -223,29 +232,33 @@ var squid: string;
     idcontext: TIdContext;
 begin
   if ASocket = nil then Exit;
+  Lock;
+  try
+    ASocket.Context    := nil;
+    ASocket.FIOHandler := nil;
+    ASocket.FClient    := nil;
+    ASocket.FHandling  := nil;
+    ASocket.FGUID      := '';
+    ASocket.FPeerIP    := '';
 
-  ASocket.Context    := nil;
-  ASocket.FIOHandler := nil;
-  ASocket.FClient    := nil;
-  ASocket.FHandling  := nil;
-  ASocket.FGUID      := '';
-  ASocket.FPeerIP    := '';
-
-  for idcontext in FConnections.Keys do
-  begin
-    if FConnections.Items[idcontext] = ASocket then
+    for idcontext in FConnections.Keys do
     begin
-      FConnections.ExtractPair(idcontext);
-      ASocket._Release;
+      if FConnections.Items[idcontext] = ASocket then
+      begin
+        FConnections.ExtractPair(idcontext);
+        ASocket._Release;
+      end;
     end;
-  end;
-  for squid in FConnectionsGUID.Keys do
-  begin
-    if FConnectionsGUID.Items[squid] = ASocket then
+    for squid in FConnectionsGUID.Keys do
     begin
-      FConnectionsGUID.ExtractPair(squid);
-      ASocket._Release; //use reference count? otherwise AV when used in TThread.Queue
+      if FConnectionsGUID.Items[squid] = ASocket then
+      begin
+        FConnectionsGUID.ExtractPair(squid);
+        ASocket._Release; //use reference count? otherwise AV when used in TThread.Queue
+      end;
     end;
+  finally
+    Unlock;
   end;
 end;
 
@@ -264,7 +277,9 @@ end;
 
 procedure TIdBaseSocketIOHandling.Lock;
 begin
-  System.TMonitor.Enter(Self);
+//  Assert(FConnections <> nil);
+//  System.TMonitor.Enter(Self);
+  FLock.Enter;
 end;
 
 function TIdBaseSocketIOHandling.NewConnection(
@@ -428,7 +443,7 @@ begin
 end;
 
 procedure TIdBaseSocketIOHandling.ProcessSocketIORequest(
-  const ASocket: TSocketIOContext; const strmRequest: TMemoryStream);
+  const ASocket: ISocketIOContext; const strmRequest: TMemoryStream);
 
   function __ReadToEnd: string;
   var
@@ -543,11 +558,12 @@ end;
 
 procedure TIdBaseSocketIOHandling.UnLock;
 begin
-  System.TMonitor.Exit(Self);
+  //System.TMonitor.Exit(Self);
+  FLock.Leave;
 end;
 
 procedure TIdBaseSocketIOHandling.ProcessSocketIORequest(
-  const ASocket: TSocketIOContext; const aData: string);
+  const ASocket: ISocketIOContext; const aData: string);
 
   function __GetSocketIOPart(const aData: string; aIndex: Integer): string;
   var ipos: Integer;
@@ -583,16 +599,18 @@ var
   callbackobj: TSocketIOCallbackObj;
   errorref: TSocketIOError;
   error: ISuperObject;
+  socket: TSocketIOContext;
 begin
   if ASocket = nil then Exit;
+  socket := ASocket as TSocketIOContext;
 
-  if not FConnections.ContainsValue(ASocket) and
-     not FConnectionsGUID.ContainsValue(ASocket) then
+  if not FConnections.ContainsValue(socket) and
+     not FConnectionsGUID.ContainsValue(socket) then
   begin
     Lock;
     try
       ASocket._AddRef;
-      FConnections.Add(nil, ASocket);  //clients do not have a TIdContext?
+      FConnections.Add(nil, socket);  //clients do not have a TIdContext?
     finally
       UnLock;
     end;
@@ -621,21 +639,21 @@ begin
   if StartsStr('0:', str) then
   begin
     schannel := __GetSocketIOPart(str, 2);
-    ProcessCloseChannel(ASocket, schannel);
+    ProcessCloseChannel(socket, schannel);
   end
   //(1) Connect
   //'1::' [path] [query]
   else if StartsStr('1:', str) then
   begin
     //todo: add channel/room to authorized channel/room list
-    if not ASocket.ConnectSend then
-      WriteString(ASocket, str);     //write same connect back, e.g. 1::/chat
+    if not socket.ConnectSend then
+      WriteString(socket, str);     //write same connect back, e.g. 1::/chat
   end
   //(2) Heartbeat
   else if StartsStr('2:', str) then
   begin
     //todo: timer to disconnect client if no ping within time
-    ProcessHeatbeatRequest(ASocket, str);
+    ProcessHeatbeatRequest(socket, str);
   end
   //(3) Message (https://github.com/LearnBoost/socket.io-spec#3-message)
   //'3:' [message id ('+')] ':' [message endpoint] ':' [data]
@@ -649,10 +667,10 @@ begin
         callbackobj := TSocketIOCallbackObj.Create;
         try
           callbackobj.FHandling := Self;
-          callbackobj.FSocket := ASocket;
+          callbackobj.FSocket := socket;
           callbackobj.FMsgNr  := imsg;
           try
-          OnSocketIOMsg(ASocket, sdata, callbackobj); //, imsg, bCallback);
+            OnSocketIOMsg(socket, sdata, callbackobj); //, imsg, bCallback);
           except
             on E:Exception do
             begin
@@ -682,10 +700,10 @@ begin
         callbackobj := TSocketIOCallbackObj.Create;
         try
           callbackobj.FHandling := Self;
-          callbackobj.FSocket := ASocket;
+          callbackobj.FSocket := socket;
           callbackobj.FMsgNr  := imsg;
           try
-          OnSocketIOJson(ASocket, SO(sdata), callbackobj); //, imsg, bCallback);
+            OnSocketIOJson(socket, SO(sdata), callbackobj); //, imsg, bCallback);
           except
             on E:Exception do
             begin
@@ -712,7 +730,7 @@ begin
     //if Assigned(OnSocketIOEvent) then
     //  OnSocketIOEvent(AContext, sdata, imsg, bCallback);
     try
-      ProcessEvent(ASocket, sdata, imsg, bCallback);
+      ProcessEvent(socket, sdata, imsg, bCallback);
     except
       on e:exception do
         //
@@ -989,6 +1007,13 @@ end;
 
 { TSocketIOContext }
 
+procedure TSocketIOContext.AfterConstruction;
+begin
+  inherited;
+  FLock  := TCriticalSection.Create;
+  FQueue := TList<string>.Create;
+end;
+
 constructor TSocketIOContext.Create(aClient: TIdHTTP);
 begin
   FClient := aClient;
@@ -1003,7 +1028,9 @@ destructor TSocketIOContext.Destroy;
 begin
   Lock;
   FEvent.Free;
-  FQueue.Free;
+  FreeAndNil(FQueue);
+  UnLock;
+  FLock.Free;
   inherited;
 end;
 
@@ -1029,7 +1056,9 @@ end;
 
 procedure TSocketIOContext.Lock;
 begin
-  System.TMonitor.Enter(Self);
+//  Assert(FQueue <> nil);
+//  System.TMonitor.Enter(Self);
+  FLock.Enter;
 end;
 
 constructor TSocketIOContext.Create;
@@ -1059,8 +1088,6 @@ procedure TSocketIOContext.QueueData(const aData: string);
 begin
   if FEvent = nil then
     FEvent := TEvent.Create;
-  if FQueue = nil then
-    FQueue := TList<string>.Create;
 
   FQueue.Add(aData);
   FEvent.SetEvent;
@@ -1134,7 +1161,8 @@ end;
 
 procedure TSocketIOContext.UnLock;
 begin
-  System.TMonitor.Exit(Self);
+  //System.TMonitor.Exit(Self);
+  FLock.Leave;
 end;
 
 function TSocketIOContext.WaitForQueue(aTimeout_ms: Integer): string;

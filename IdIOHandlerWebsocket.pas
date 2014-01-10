@@ -31,10 +31,12 @@ type
     FCloseReason: string;
     FCloseCode: Integer;
     FClosing: Boolean;
+    class var FUseSingleWriteThread: Boolean;
   protected
     FMessageStream: TMemoryStream;
     FWriteTextToTarget: Boolean;
     FCloseCodeSend: Boolean;
+    FPendingWriteCount: Integer;
 
     function InternalReadDataFromSource(var VBuffer: TIdBytes; ARaiseExceptionOnTimeout: Boolean): Integer;
     function ReadDataFromSource(var VBuffer: TIdBytes): Integer; override;
@@ -50,6 +52,7 @@ type
     property IsServerSide  : Boolean read FIsServerSide  write FIsServerSide;
     property ClientExtensionBits : TWSExtensionBits read FExtensionBits write FExtensionBits;
   public
+    class constructor Create;
     procedure  AfterConstruction;override;
     destructor Destroy; override;
 
@@ -57,6 +60,8 @@ type
     procedure Unlock;
     function  TryLock: Boolean;
 
+    function  HasData: Boolean;
+    procedure Clear;
     function  Readable(AMSec: Integer = IdTimeoutDefault): Boolean; override;
     function  Connected: Boolean; override;
 
@@ -71,7 +76,46 @@ type
     procedure WriteLnRFC(const AOut: string = ''; AEncoding: TIdTextEncoding = nil); override;
     procedure Write(AValue: TStrings; AWriteLinesCount: Boolean = False; AEncoding: TIdTextEncoding = nil); overload; override;
     procedure Write(AStream: TStream; aType: TWSDataType); overload;
+    procedure WriteBufferFlush(AByteCount: Integer); override;
+
+    class property UseSingleWriteThread: Boolean read FUseSingleWriteThread write FUseSingleWriteThread;
   end;
+
+  TIdWebsocketQueueThread = class(TThread)
+  private
+    function GetThreadID: TThreadID;
+  protected
+    FLock: TCriticalSection;
+    FTempThread: Integer;
+    FEvent: TEvent;
+    FEvents, FProcessing: TList<TThreadProcedure>;
+  public
+    procedure  AfterConstruction;override;
+    destructor Destroy; override;
+
+    procedure Lock;
+    procedure UnLock;
+
+    procedure ProcessQueue;
+    procedure Execute; override;
+
+    property ThreadID: TThreadID read GetThreadID;
+
+    procedure Terminate;
+    procedure QueueEvent(aEvent: TThreadProcedure);
+  end;
+
+  //http://tangentsoft.net/wskfaq/intermediate.html
+  //Winsock is not threadsafe, use a single/seperate write thread and seperate read thread
+  //(do not write in 2 different thread or read in 2 different threads)
+  TIdWebsocketWriteThread = class(TIdWebsocketQueueThread)
+  private
+    class var FInstance: TIdWebsocketWriteThread;
+  public
+    class function  Instance: TIdWebsocketWriteThread;
+    class procedure RemoveInstance;
+  end;
+
 
 //close frame codes
 const
@@ -125,7 +169,8 @@ const
 implementation
 
 uses
-  SysUtils, Math, IdStream, IdStack, IdWinsock2, IdExceptionCore,
+  SysUtils, Math, Windows,
+  IdStream, IdStack, IdWinsock2, IdExceptionCore,
   IdResourceStrings, IdResourceStringsCore;
 
 //frame codes
@@ -139,6 +184,23 @@ const
   C_FrameCode_Pong         = 10 {A};
   //B-F are reserved for further control frames
 
+function BytesToStringRaw(const AValue: TIdBytes): string;
+var
+  i: Integer;
+begin
+  //SetLength(Result, Length(aValue));
+  for i := 0 to High(AValue) do
+  begin
+    if (AValue[i] < 33) or
+       ( (AValue[i] > 126) and
+         (AValue[i] < 161) )
+    then
+      Result := Result + '#' + IntToStr(AValue[i])
+    else
+      Result := Result + Char(AValue[i])
+  end;
+end;
+
 { TIdIOHandlerStack_Websocket }
 
 procedure TIdIOHandlerWebsocket.AfterConstruction;
@@ -148,6 +210,12 @@ begin
   FWSInputBuffer := TIdBuffer.Create;
   FLock := TCriticalSection.Create;
   FSelectLock := TCriticalSection.Create;
+end;
+
+procedure TIdIOHandlerWebsocket.Clear;
+begin
+  FWSInputBuffer.Clear;
+  InputBuffer.Clear;
 end;
 
 procedure TIdIOHandlerWebsocket.Close;
@@ -224,11 +292,24 @@ end;
 
 function TIdIOHandlerWebsocket.Connected: Boolean;
 begin
-  Result := inherited Connected;
+  Lock;
+  try
+    Result := inherited Connected;
+  finally
+    Unlock;
+  end;
+end;
+
+class constructor TIdIOHandlerWebsocket.Create;
+begin
+  //UseSingleWriteThread := True;
 end;
 
 destructor TIdIOHandlerWebsocket.Destroy;
 begin
+  while FPendingWriteCount > 0 do
+    Sleep(1);
+
   FLock.Enter;
   FSelectLock.Enter;
   FLock.Free;
@@ -239,10 +320,15 @@ begin
   inherited;
 end;
 
+function TIdIOHandlerWebsocket.HasData: Boolean;
+begin
+  //buffered data available? (more data from previous read)
+  Result := (FWSInputBuffer.Size > 0);
+end;
+
 function TIdIOHandlerWebsocket.InternalReadDataFromSource(
   var VBuffer: TIdBytes; ARaiseExceptionOnTimeout: Boolean): Integer;
 begin
-  Result := -1;
   SetLength(VBuffer, 0);
 
   CheckForDisconnect;
@@ -268,7 +354,8 @@ begin
   begin
     CheckForDisconnect; //disconnected in the mean time?
     GStack.CheckForSocketError(GStack.WSGetLastError); //check for socket error
-    EIdNoDataToRead.Toss(RSIdNoDataToRead); //nothing read? then connection is probably closed -> exit
+    if ARaiseExceptionOnTimeout then
+      EIdNoDataToRead.Toss(RSIdNoDataToRead); //nothing read? then connection is probably closed -> exit
   end;
   SetLength(VBuffer, Result);
 end;
@@ -276,61 +363,163 @@ end;
 procedure TIdIOHandlerWebsocket.WriteLn(const AOut: string;
   AEncoding: TIdTextEncoding);
 begin
-  FWriteTextToTarget := True;
-  try
-    inherited WriteLn(AOut, TIdTextEncoding.UTF8);  //must be UTF8!
-  finally
-    FWriteTextToTarget := False;
+  if UseSingleWriteThread and IsWebsocket and
+     (GetCurrentThreadId <> TIdWebsocketWriteThread.Instance.ThreadID) then
+  begin
+    InterlockedIncrement(FPendingWriteCount);
+    TIdWebsocketWriteThread.Instance.QueueEvent(
+      procedure
+      begin
+        InterlockedDecrement(FPendingWriteCount);
+        WriteLn(AOut, AEncoding);
+      end)
+  end
+  else
+  begin
+    Lock;
+    try
+      FWriteTextToTarget := True;
+      inherited WriteLn(AOut, TIdTextEncoding.UTF8);  //must be UTF8!
+    finally
+      FWriteTextToTarget := False;
+      Unlock;
+    end;
   end;
 end;
 
 procedure TIdIOHandlerWebsocket.WriteLnRFC(const AOut: string;
   AEncoding: TIdTextEncoding);
 begin
-  FWriteTextToTarget := True;
-  try
-    inherited WriteLnRFC(AOut, TIdTextEncoding.UTF8);  //must be UTF8!
-  finally
-    FWriteTextToTarget := False;
+  if UseSingleWriteThread and IsWebsocket and
+     (GetCurrentThreadId <> TIdWebsocketWriteThread.Instance.ThreadID) then
+  begin
+    InterlockedIncrement(FPendingWriteCount);
+    TIdWebsocketWriteThread.Instance.QueueEvent(
+      procedure
+      begin
+        InterlockedDecrement(FPendingWriteCount);
+        WriteLnRFC(AOut, AEncoding);
+      end)
+  end
+  else
+  begin
+    Lock;
+    try
+      FWriteTextToTarget := True;
+      inherited WriteLnRFC(AOut, TIdTextEncoding.UTF8);  //must be UTF8!
+    finally
+      FWriteTextToTarget := False;
+      Unlock;
+    end;
   end;
 end;
 
 procedure TIdIOHandlerWebsocket.Write(const AOut: string;
   AEncoding: TIdTextEncoding);
 begin
-  FWriteTextToTarget := True;
-  try
-    inherited Write(AOut, TIdTextEncoding.UTF8);  //must be UTF8!
-  finally
-    FWriteTextToTarget := False;
+  if UseSingleWriteThread and IsWebsocket and
+     (GetCurrentThreadId <> TIdWebsocketWriteThread.Instance.ThreadID) then
+  begin
+    InterlockedIncrement(FPendingWriteCount);
+    TIdWebsocketWriteThread.Instance.QueueEvent(
+      procedure
+      begin
+        InterlockedDecrement(FPendingWriteCount);
+        Write(AOut, AEncoding);
+      end)
+  end
+  else
+  begin
+    Lock;
+    try
+      FWriteTextToTarget := True;
+      inherited Write(AOut, TIdTextEncoding.UTF8);  //must be UTF8!
+    finally
+      FWriteTextToTarget := False;
+      Unlock;
+    end;
   end;
 end;
 
 procedure TIdIOHandlerWebsocket.Write(AValue: TStrings;
   AWriteLinesCount: Boolean; AEncoding: TIdTextEncoding);
 begin
-  FWriteTextToTarget := True;
-  try
-    inherited Write(AValue, AWriteLinesCount, TIdTextEncoding.UTF8);  //must be UTF8!
-  finally
-    FWriteTextToTarget := False;
+  if UseSingleWriteThread and IsWebsocket and
+     (GetCurrentThreadId <> TIdWebsocketWriteThread.Instance.ThreadID) then
+  begin
+    InterlockedIncrement(FPendingWriteCount);
+    TIdWebsocketWriteThread.Instance.QueueEvent(
+      procedure
+      begin
+        InterlockedDecrement(FPendingWriteCount);
+        Write(AValue, AWriteLinesCount, AEncoding);
+      end)
+  end
+  else
+  begin
+    Lock;
+    try
+      FWriteTextToTarget := True;
+      inherited Write(AValue, AWriteLinesCount, TIdTextEncoding.UTF8);  //must be UTF8!
+    finally
+      FWriteTextToTarget := False;
+      Unlock;
+    end;
   end;
 end;
 
 procedure TIdIOHandlerWebsocket.Write(AStream: TStream;
   aType: TWSDataType);
 begin
-  FWriteTextToTarget := (aType = wdtText);
-  try
-    inherited Write(AStream);
-  finally
-    FWriteTextToTarget := False;
+  if UseSingleWriteThread and IsWebsocket and
+     (GetCurrentThreadId <> TIdWebsocketWriteThread.Instance.ThreadID) then
+  begin
+    InterlockedIncrement(FPendingWriteCount);
+    TIdWebsocketWriteThread.Instance.QueueEvent(
+      procedure
+      begin
+        InterlockedDecrement(FPendingWriteCount);
+        Write(AStream, aType);
+      end)
+  end
+  else
+  begin
+    Lock;
+    try
+      FWriteTextToTarget := (aType = wdtText);
+      inherited Write(AStream);
+    finally
+      FWriteTextToTarget := False;
+      Unlock;
+    end;
   end;
+end;
+
+procedure TIdIOHandlerWebsocket.WriteBufferFlush(AByteCount: Integer);
+begin
+  if (FWriteBuffer = nil) or (FWriteBuffer.Size <= 0) then Exit;
+
+  if UseSingleWriteThread and IsWebsocket and
+     (GetCurrentThreadId <> TIdWebsocketWriteThread.Instance.ThreadID) then
+  begin
+    InterlockedIncrement(FPendingWriteCount);
+    TIdWebsocketWriteThread.Instance.QueueEvent(
+      procedure
+      begin
+        InterlockedDecrement(FPendingWriteCount);
+        WriteBufferFlush(AByteCount);
+      end)
+  end
+  else
+    inherited WriteBufferFlush(AByteCount);
 end;
 
 function TIdIOHandlerWebsocket.WriteDataToTarget(const ABuffer: TIdBytes;
   const AOffset, ALength: Integer): Integer;
 begin
+  if UseSingleWriteThread and IsWebsocket and (GetCurrentThreadId <> TIdWebsocketWriteThread.Instance.ThreadID) then
+    Assert(False, 'Write done in different thread than TIdWebsocketWriteThread!');
+
   if not IsWebsocket then
     Result := inherited WriteDataToTarget(ABuffer, AOffset, ALength)
   else
@@ -541,9 +730,15 @@ var
   var
     temp: TIdBytes;
   begin
+    if HasData then Exit(True);
+
     Result := InternalReadDataFromSource(temp, ARaiseExceptionOnTimeout) > 0;
     if Result then
+    begin
       FWSInputBuffer.Write(temp);
+      //if debughook > 0 then
+      //  OutputDebugString(PChar('Received: ' + BytesToStringRaw(temp)));
+    end;
   end;
 
   function _GetByte: Byte;
@@ -570,6 +765,8 @@ var
     begin
       InternalReadDataFromSource(temp, True); 
       FWSInputBuffer.Write(temp);
+      //if debughook > 0 then
+      //  OutputDebugString(PChar('Received: ' + BytesToStringRaw(temp)));
       if FWSInputBuffer.Size < aCount then
         Sleep(1);
     end;
@@ -691,7 +888,7 @@ function TIdIOHandlerWebsocket.WriteData(aData: TIdBytes;
   aType: TWSDataCode; aFIN, aRSV1, aRSV2, aRSV3: boolean): integer;
 var
   iByte: Byte;
-  i: NativeInt;
+  i, ioffset: NativeInt;
   iDataLength, iPos: Int64;
   rLength: Int64Rec;
   rMask: record
@@ -784,14 +981,9 @@ begin
     //write header
     strmData.Position := 0;
     TIdStreamHelper.ReadBytes(strmData, bData);
-    Result := Binding.Send(bData);
 
     //Mask? Note: Only clients must apply a mask
-    if IsServerSide then
-    begin
-      Result := Binding.Send(aData);
-    end
-    else
+    if not IsServerSide then
     begin
       iPos := 0;
       iDataLength := Length(aData);
@@ -802,12 +994,160 @@ begin
         aData[iPos] := iByte;
         inc(iPos);
       end;
-
-      //send masked data
-      Result := Binding.Send(aData);
     end;
+
+    AppendBytes(bData, aData);   //important: send all at once!
+    ioffset := 0;
+    repeat
+      Result := Binding.Send(bData, ioffset);
+      Inc(ioffset, Result);
+    until ioffset >= Length(bData);
+
+    //if debughook > 0 then
+    //  OutputDebugString(PChar('Written: ' + BytesToStringRaw(bData)));
   finally
     strmData.Free;
+  end;
+end;
+
+{ TIdWebsocketQueueThread }
+
+procedure TIdWebsocketQueueThread.AfterConstruction;
+begin
+  inherited;
+  FLock       := TCriticalSection.Create;
+  FEvents     := TList<TThreadProcedure>.Create;
+  FProcessing := TList<TThreadProcedure>.Create;
+  FEvent      := TEvent.Create;
+end;
+
+destructor TIdWebsocketQueueThread.Destroy;
+begin
+  Lock;
+  FEvents.Clear;
+  FProcessing.Free;
+
+  FEvent.Free;
+  UnLock;
+  FEvents.Free;
+  FLock.Free;
+  inherited;
+end;
+
+procedure TIdWebsocketQueueThread.Execute;
+begin
+  TThread.NameThreadForDebugging(Self.ClassName);
+
+  while not Terminated do
+  begin
+    try
+      if FEvent.WaitFor(3 * 1000) = wrSignaled then
+      begin
+        FEvent.ResetEvent;
+        ProcessQueue;
+      end;
+
+      if FProcessing.Count > 0 then
+        ProcessQueue;
+    except
+      //continue
+    end;
+  end;
+end;
+
+function TIdWebsocketQueueThread.GetThreadID: TThreadID;
+begin
+  if FTempThread > 0 then
+    Result := FTempThread
+  else
+    Result := inherited ThreadID;
+end;
+
+procedure TIdWebsocketQueueThread.Lock;
+begin
+  //System.TMonitor.Enter(FEvents);
+  FLock.Enter;
+end;
+
+procedure TIdWebsocketQueueThread.ProcessQueue;
+var
+  proc: Classes.TThreadProcedure;
+begin
+  FTempThread := GetCurrentThreadId;
+
+  Lock;
+  try
+    //copy
+    while FEvents.Count > 0 do
+    begin
+      proc := FEvents.Items[0];
+      FProcessing.Add(proc);
+      FEvents.Delete(0);
+    end;
+  finally
+    UnLock;
+  end;
+
+  while FProcessing.Count > 0 do
+  begin
+    proc := FProcessing.Items[0];
+    FProcessing.Delete(0);
+    proc();
+  end;
+end;
+
+procedure TIdWebsocketQueueThread.QueueEvent(aEvent: TThreadProcedure);
+begin
+  if Terminated then Exit;
+
+  Lock;
+  try
+    FEvents.Add(aEvent);
+  finally
+    UnLock;
+  end;
+  FEvent.SetEvent;
+end;
+
+procedure TIdWebsocketQueueThread.Terminate;
+begin
+  inherited Terminate;
+  FEvent.SetEvent;
+end;
+
+procedure TIdWebsocketQueueThread.UnLock;
+begin
+  //System.TMonitor.Exit(FEvents);
+  FLock.Leave;
+end;
+
+{ TIdWebsocketWriteThread }
+
+class function TIdWebsocketWriteThread.Instance: TIdWebsocketWriteThread;
+begin
+  if FInstance = nil then
+  begin
+    GlobalNameSpace.BeginWrite;
+    try
+      if FInstance = nil then
+      begin
+        FInstance := Self.Create(True);
+        FInstance.Start;
+      end;
+    finally
+      GlobalNameSpace.EndWrite;
+    end;
+  end;
+  Result := FInstance;
+end;
+
+class procedure TIdWebsocketWriteThread.RemoveInstance;
+begin
+  if FInstance <> nil then
+  begin
+    FInstance.Terminate;
+    FInstance.WaitFor;
+    FreeAndNil(FInstance);
   end;
 end;
 

@@ -140,23 +140,13 @@ type
     class procedure RemoveInstance;
   end;
 
-  //async post data
-  TIdWebsocketDispatchThread = class(TThread)
+  //async process data
+  TIdWebsocketDispatchThread = class(TIdWebsocketQueueThread)
   private
     class var FInstance: TIdWebsocketDispatchThread;
-  protected
-    FEvent: TEvent;
-    FEvents, FProcessing: TList<TThreadProcedure>;
-    procedure Execute; override;
   public
-    procedure  AfterConstruction;override;
-    destructor Destroy; override;
-
-    procedure Terminate;
-
-    procedure QueueEvent(aEvent: TThreadProcedure);
-
-    class function Instance: TIdWebsocketDispatchThread;
+    class function  Instance: TIdWebsocketDispatchThread;
+    class procedure RemoveInstance;
   end;
 
 implementation
@@ -248,6 +238,9 @@ end;
 
 procedure TIdHTTPWebsocketClient.Connect;
 begin
+  if IOHandler <> nil then
+    IOHandler.Clear;
+
   FHeartBeat.Enabled := True;
   inherited Connect;
 end;
@@ -289,7 +282,7 @@ begin
 
       inherited DisConnect(ANotifyPeer);
       //clear buffer, other still "connected"
-      IOHandler.InputBuffer.Clear;
+      IOHandler.Clear;
 
       //IOHandler.Free;
       //IOHandler := TIdIOHandlerWebsocket.Create(nil);
@@ -320,20 +313,17 @@ begin
     try
       if (IOHandler <> nil) and
          not IOHandler.ClosedGracefully and
-         //IOHandler.Connected and
+         IOHandler.Connected and
          (FSocketIOContext <> nil) then
       begin
-        //not threadsafe because of background ReadAllThreads?
-        //FSocketIO.WritePing(FSocketIOContext as TSocketIOContext);  //heartbeat socket.io message
+        FSocketIO.WritePing(FSocketIOContext as TSocketIOContext);  //heartbeat socket.io message
       end
       //retry re-connect
       else
       try
         //clear inputbuffer, otherwise it can't connect :(
-        if (IOHandler <> nil) and
-           not IOHandler.InputBufferIsEmpty
-        then
-          IOHandler.DiscardAll;
+        if (IOHandler <> nil) then
+          IOHandler.Clear;
 
         Self.Connect;
         TryUpgradeToWebsocket;
@@ -343,10 +333,8 @@ begin
     except on E:Exception do
       begin
         //clear inputbuffer, otherwise it stays connected :(
-        if (IOHandler <> nil) and
-           not IOHandler.InputBufferIsEmpty
-        then
-          IOHandler.DiscardAll;
+        if (IOHandler <> nil) then
+          IOHandler.Clear;
         Disconnect(False);
 
         if Assigned(OnDisConnected) then
@@ -1048,22 +1036,15 @@ begin
          (chn.Socket.Binding.Handle > 0) and
          (chn.Socket.Binding.Handle <> INVALID_SOCKET) then
       begin
-//        if chn.IOHandler.TryLock then
-//        try
+        if chn.IOHandler.HasData then
+        begin
+          Inc(iResult);
+          Break;
+        end;
 
-          //todo: seperate read thread is needed because of threadsafety
-          if chn.IOHandler.Readable( 1000 div l.Count ) then
-          begin
-            Inc(iResult);
-            Break;
-          end;
-//        finally
-//          chn.IOHandler.Unlock;
-//        end;
-
-//        Freadset.fd_count         := iCount+1;
-//        Freadset.fd_array[iCount] := chn.Socket.Binding.Handle;
-//        Inc(iCount);
+        Freadset.fd_count         := iCount+1;
+        Freadset.fd_array[iCount] := chn.Socket.Binding.Handle;
+        Inc(iCount);
       end;
     end;
 
@@ -1081,23 +1062,24 @@ begin
   Finterval.tv_sec  := 15; //15s
   Finterval.tv_usec := 0;
 
-  {
   //nothing to wait for? then sleep some time to prevent 100% CPU
-  if iCount = 0 then
+  if iResult = 0 then
   begin
-    iResult := IdWinsock2.select(0, nil, nil, @Fexceptionset, @Finterval);
+    if iCount = 0 then
+    begin
+      iResult := IdWinsock2.select(0, nil, nil, @Fexceptionset, @Finterval);
+      if iResult = SOCKET_ERROR then
+        iResult := 1;  //ignore errors
+    end
+    //wait till a socket has some data (or a signal via exceptionset is fired)
+    else
+      iResult := IdWinsock2.select(0, @Freadset, nil, @Fexceptionset, @Finterval);
     if iResult = SOCKET_ERROR then
-      iResult := 1;  //ignore errors
-  end
-  //wait till a socket has some data (or a signal via exceptionset is fired)
-  else
-    iResult := IdWinsock2.select(0, @Freadset, nil, @Fexceptionset, @Finterval);
+      //raise EIdWinsockStubError.Build(WSAGetLastError, '', []);
+      //ignore error during wait: socket disconnected etc
+      Exit;
+  end;
 
-  if iResult = SOCKET_ERROR then
-    //raise EIdWinsockStubError.Build(WSAGetLastError, '', []);
-    //ignore error during wait: socket disconnected etc
-    Exit;
-  }
   if Terminated then Exit;
 
   //some data?
@@ -1113,7 +1095,8 @@ begin
         chn := TIdHTTPWebsocketClient(l.Items[i]);
         try
           //try to process all events
-          while chn.IOHandler.Readable(0) do //has some data
+          while chn.IOHandler.HasData or
+                chn.IOHandler.Readable(0) do     //has some data
           begin
             ws  := chn.IOHandler as TIdIOHandlerWebsocket;
             //no pending dispatch active? (so actually we only read events here?)
@@ -1172,7 +1155,6 @@ begin
     end;
   end
   else
-    Sleep(10);
 end;
 
 procedure TIdWebsocketMultiReadThread.RemoveClient(
@@ -1186,7 +1168,11 @@ end;
 class procedure TIdWebsocketMultiReadThread.RemoveInstance;
 begin
   if FInstance <> nil then
+  begin
+    FInstance.Terminate;
+    FInstance.WaitFor;
     FreeAndNil(FInstance);
+  end;
 end;
 
 procedure TIdWebsocketMultiReadThread.ResetSpecialEventSocket;
@@ -1214,63 +1200,6 @@ end;
 
 { TIdWebsocketDispatchThread }
 
-procedure TIdWebsocketDispatchThread.AfterConstruction;
-begin
-  inherited;
-  FEvents     := TList<TThreadProcedure>.Create;
-  FProcessing := TList<TThreadProcedure>.Create;
-  FEvent  := TEvent.Create;
-end;
-
-destructor TIdWebsocketDispatchThread.Destroy;
-begin
-  System.TMonitor.Enter(FEvents);
-  FEvents.Clear;
-  FEvents.Free;
-  FProcessing.Free;
-
-  FEvent.Free;
-  inherited;
-end;
-
-procedure TIdWebsocketDispatchThread.Execute;
-var
-  proc: Classes.TThreadProcedure;
-begin
-  TThread.NameThreadForDebugging(Self.ClassName);
-
-  while not Terminated do
-  begin
-    try
-      if FEvent.WaitFor(3 * 1000) = wrSignaled then
-      begin
-        FEvent.ResetEvent;
-        System.TMonitor.Enter(FEvents);
-        try
-          //copy
-          while FEvents.Count > 0 do
-          begin
-            proc := FEvents.Items[0];
-            FProcessing.Add(proc);
-            FEvents.Delete(0);
-          end;
-        finally
-          System.TMonitor.Exit(FEvents);
-        end;
-      end;
-
-      while FProcessing.Count > 0 do
-      begin
-        proc := FProcessing.Items[0];
-        FProcessing.Delete(0);
-        proc();
-      end;
-    except
-      //continue
-    end;
-  end;
-end;
-
 class function TIdWebsocketDispatchThread.Instance: TIdWebsocketDispatchThread;
 begin
   if FInstance = nil then
@@ -1279,7 +1208,7 @@ begin
     try
       if FInstance = nil then
       begin
-        FInstance := TIdWebsocketDispatchThread.Create(True);
+        FInstance := Self.Create(True);
         FInstance.Start;
       end;
     finally
@@ -1289,31 +1218,19 @@ begin
   Result := FInstance;
 end;
 
-procedure TIdWebsocketDispatchThread.QueueEvent(aEvent: TThreadProcedure);
+class procedure TIdWebsocketDispatchThread.RemoveInstance;
 begin
-  System.TMonitor.Enter(FEvents);
-  try
-    FEvents.Add(aEvent);
-  finally
-    System.TMonitor.Exit(FEvents);
+  if FInstance <> nil then
+  begin
+    FInstance.Terminate;
+    FInstance.WaitFor;
+    FreeAndNil(FInstance);
   end;
-  FEvent.SetEvent;
-end;
-
-procedure TIdWebsocketDispatchThread.Terminate;
-begin
-  inherited Terminate;
-  FEvent.SetEvent;
 end;
 
 initialization
 finalization
-  if TIdWebsocketMultiReadThread.FInstance <> nil then
-  begin
-    TIdWebsocketMultiReadThread.Instance.Terminate;
-    TIdWebsocketMultiReadThread.Instance.WaitFor;
-//    TBaseNamedThread.WaitForThread(TIdWebsocketMultiReadThread.Instance, 5 * 1000);
-    TIdWebsocketMultiReadThread.RemoveInstance;
-  end;
+  TIdWebsocketMultiReadThread.RemoveInstance;
+  TIdWebsocketDispatchThread.RemoveInstance
 
 end.
