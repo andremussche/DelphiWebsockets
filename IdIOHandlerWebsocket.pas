@@ -81,6 +81,8 @@ type
     class property UseSingleWriteThread: Boolean read FUseSingleWriteThread write FUseSingleWriteThread;
   end;
 
+  TThreadID = NativeUInt;
+
   TIdWebsocketQueueThread = class(TThread)
   private
     function GetThreadID: TThreadID;
@@ -1036,7 +1038,7 @@ end;
 
 procedure TIdWebsocketQueueThread.Execute;
 begin
-  TThread.NameThreadForDebugging(Self.ClassName);
+  TThread.NameThreadForDebugging(ansistring(Self.ClassName));
 
   while not Terminated do
   begin

@@ -1153,8 +1153,7 @@ begin
         FChannels.UnlockList;
       strmEvent.Free;
     end;
-  end
-  else
+  end;
 end;
 
 procedure TIdWebsocketMultiReadThread.RemoveClient(
