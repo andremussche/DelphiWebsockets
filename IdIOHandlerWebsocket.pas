@@ -6,8 +6,9 @@ unit IdIOHandlerWebsocket;
 interface
 
 uses
-  Classes,
-  IdIOHandlerStack, IdGlobal, IdException, IdBuffer, SyncObjs,
+  Classes, SysUtils,
+  IdIOHandlerStack, IdGlobal, IdException, IdBuffer,
+  SyncObjs,
   Generics.Collections;
 
 type
@@ -18,6 +19,10 @@ type
 
   TIdIOHandlerWebsocket   = class;
   EIdWebSocketHandleError = class(EIdSocketHandleError);
+
+  {$if CompilerVersion >= 26}   //XE5
+  TIdTextEncoding = IIdTextEncoding;
+  {$ifend}
 
   TIdIOHandlerWebsocket = class(TIdIOHandlerStack)
   private
@@ -44,6 +49,12 @@ type
 
     function ReadFrame(out aFIN, aRSV1, aRSV2, aRSV3: boolean; out aDataCode: TWSDataCode; out aData: TIdBytes): Integer;
     function ReadMessage(var aBuffer: TIdBytes; out aDataCode: TWSDataCode): Integer;
+
+    {$if CompilerVersion >= 26}   //XE5
+    function UTF8Encoding: IIdTextEncoding;
+    {$else}
+    function UTF8Encoding: TEncoding;
+    {$ifend}
   public
     function WriteData(aData: TIdBytes; aType: TWSDataCode;
                         aFIN: boolean = true; aRSV1: boolean = false; aRSV2: boolean = false; aRSV3: boolean = false): integer;
@@ -171,7 +182,7 @@ const
 implementation
 
 uses
-  SysUtils, Math, Windows,
+  Math, Windows,
   IdStream, IdStack, IdWinsock2, IdExceptionCore,
   IdResourceStrings, IdResourceStringsCore;
 
@@ -381,7 +392,7 @@ begin
     Lock;
     try
       FWriteTextToTarget := True;
-      inherited WriteLn(AOut, TIdTextEncoding.UTF8);  //must be UTF8!
+      inherited WriteLn(AOut, UTF8Encoding);  //must be UTF8!
     finally
       FWriteTextToTarget := False;
       Unlock;
@@ -408,7 +419,7 @@ begin
     Lock;
     try
       FWriteTextToTarget := True;
-      inherited WriteLnRFC(AOut, TIdTextEncoding.UTF8);  //must be UTF8!
+      inherited WriteLnRFC(AOut, UTF8Encoding);  //must be UTF8!
     finally
       FWriteTextToTarget := False;
       Unlock;
@@ -435,7 +446,7 @@ begin
     Lock;
     try
       FWriteTextToTarget := True;
-      inherited Write(AOut, TIdTextEncoding.UTF8);  //must be UTF8!
+      inherited Write(AOut, UTF8Encoding);  //must be UTF8!
     finally
       FWriteTextToTarget := False;
       Unlock;
@@ -462,7 +473,7 @@ begin
     Lock;
     try
       FWriteTextToTarget := True;
-      inherited Write(AValue, AWriteLinesCount, TIdTextEncoding.UTF8);  //must be UTF8!
+      inherited Write(AValue, AWriteLinesCount, UTF8Encoding);  //must be UTF8!
     finally
       FWriteTextToTarget := False;
       Unlock;
@@ -654,7 +665,7 @@ begin
               FCloseCode := (iaReadBuffer[0] shl 8) +
                              iaReadBuffer[1];
               if Length(iaReadBuffer) > 2 then
-                FCloseReason := BytesToString(iaReadBuffer, 2, Length(iaReadBuffer), TEncoding.UTF8);
+                FCloseReason := BytesToString(iaReadBuffer, 2, Length(iaReadBuffer), UTF8Encoding);
             end;
 
             FClosing := True;
@@ -722,6 +733,18 @@ procedure TIdIOHandlerWebsocket.Unlock;
 begin
   FLock.Leave;
 end;
+
+{$if CompilerVersion >= 26}   //XE5
+function TIdIOHandlerWebsocket.UTF8Encoding: IIdTextEncoding;
+begin
+  Result := IndyTextEncoding_UTF8;
+end;
+{$else}
+function TIdIOHandlerWebsocket.UTF8Encoding: TEncoding;
+begin
+  Result := TIdTextEncoding.UTF8;
+end;
+{$ifend}
 
 function TIdIOHandlerWebsocket.ReadFrame(out aFIN, aRSV1, aRSV2, aRSV3: boolean;
                                          out aDataCode: TWSDataCode; out aData: TIdBytes): Integer;
@@ -899,7 +922,7 @@ var
       False: (MaskAsInt  : Int32);
   end;
   strmData: TMemoryStream;
-  bData: TBytes;
+  bData: TIdBytes;
 begin
   Result := 0;
   Assert(Binding <> nil);
