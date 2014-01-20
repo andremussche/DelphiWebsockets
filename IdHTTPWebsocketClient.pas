@@ -325,6 +325,7 @@ begin
         if (IOHandler <> nil) then
           IOHandler.Clear;
 
+        Self.ConnectTimeout := 100;
         Self.Connect;
         TryUpgradeToWebsocket;
       except

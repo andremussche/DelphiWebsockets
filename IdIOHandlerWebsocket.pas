@@ -556,6 +556,8 @@ end;
 
 function TIdIOHandlerWebsocket.Readable(AMSec: Integer): Boolean;
 begin
+  if FWSInputBuffer.Size > 0 then Exit(True);
+
   if not FSelectLock.TryEnter then Exit(False);
   try
     Result := inherited Readable(AMSec);
