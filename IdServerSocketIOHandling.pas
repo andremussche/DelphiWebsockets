@@ -16,7 +16,8 @@ type
     function  SendToAll(const aMessage: string; const aCallback: TSocketIOMsgJSON = nil; const aOnError: TSocketIOError = nil): Integer;
     procedure SendTo   (const aContext: TIdServerContext; const aMessage: string; const aCallback: TSocketIOMsgJSON = nil; const aOnError: TSocketIOError = nil);
 
-    function  EmitEventToAll(const aEventName: string; const aData: ISuperObject; const aCallback: TSocketIOMsgJSON = nil; const aOnError: TSocketIOError = nil): Integer;
+    function  EmitEventToAll(const aEventName: string; const aData: ISuperObject; const aCallback: TSocketIOMsgJSON = nil; const aOnError: TSocketIOError = nil): Integer;overload;
+    function  EmitEventToAll(const aEventName: string; const aData: string      ; const aCallback: TSocketIOMsgJSON = nil; const aOnError: TSocketIOError = nil): Integer;overload;
     procedure EmitEventTo   (const aContext: TSocketIOContext;
                              const aEventName: string; const aData: ISuperObject; const aCallback: TSocketIOMsgJSON = nil; const aOnError: TSocketIOError = nil);overload;
     procedure EmitEventTo   (const aContext: TIdServerContext;
@@ -71,19 +72,15 @@ begin
   end;
 end;
 
-function TIdServerSocketIOHandling.EmitEventToAll(const aEventName: string; const aData: ISuperObject;
-  const aCallback: TSocketIOMsgJSON; const aOnError: TSocketIOError): Integer;
+function TIdServerSocketIOHandling.EmitEventToAll(const aEventName,
+  aData: string; const aCallback: TSocketIOMsgJSON;
+  const aOnError: TSocketIOError): Integer;
 var
   context: TSocketIOContext;
   jsonarray: string;
 begin
   Result := 0;
-  if aData.IsType(stArray) then
-    jsonarray := aData.AsString
-  else if aData.IsType(stString) then
-    jsonarray := '["' + aData.AsString + '"]'
-  else
-    jsonarray := '[' + aData.AsString + ']';
+  jsonarray := '[' + aData + ']';
 
   Lock;
   try
@@ -118,6 +115,15 @@ begin
   finally
     UnLock;
   end;
+end;
+
+function TIdServerSocketIOHandling.EmitEventToAll(const aEventName: string; const aData: ISuperObject;
+  const aCallback: TSocketIOMsgJSON; const aOnError: TSocketIOError): Integer;
+begin
+  if aData.IsType(stString) then
+    Result := EmitEventToAll(aEventName, '"' + aData.AsString + '"', aCallback, aOnError)
+  else
+    Result := EmitEventToAll(aEventName, aData.AsString, aCallback, aOnError);
 end;
 
 procedure TIdServerSocketIOHandling.ProcessHeatbeatRequest(
