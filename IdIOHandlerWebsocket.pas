@@ -36,6 +36,7 @@ type
     FCloseReason: string;
     FCloseCode: Integer;
     FClosing: Boolean;
+    FLastActivityTime: TDateTime;
     class var FUseSingleWriteThread: Boolean;
   protected
     FMessageStream: TMemoryStream;
@@ -88,6 +89,8 @@ type
     procedure Write(AValue: TStrings; AWriteLinesCount: Boolean = False; AEncoding: TIdTextEncoding = nil); overload; override;
     procedure Write(AStream: TStream; aType: TWSDataType); overload;
     procedure WriteBufferFlush(AByteCount: Integer); override;
+
+    property  LastActivityTime: TDateTime read FLastActivityTime write FLastActivityTime;
 
     class property UseSingleWriteThread: Boolean read FUseSingleWriteThread write FUseSingleWriteThread;
   end;
@@ -819,6 +822,7 @@ begin
   SetLength(aData, 0);
 
   if not _WaitByte(False) then Exit;
+  FLastActivityTime := Now;   //received some data
 
   //wait + process data
   iByte := _GetByte;
@@ -930,7 +934,9 @@ begin
   Assert(Binding <> nil);
 
   strmData := TMemoryStream.Create;
+  Lock;
   try
+    FLastActivityTime := Now;   //sending some data
     (* 0                   1                   2                   3
        0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 (nr)
        7 6 5 4 3 2 1 0|7 6 5 4 3 2 1 0|7 6 5 4 3 2 1 0|7 6 5 4 3 2 1 0 (bit)
@@ -1033,6 +1039,7 @@ begin
     //if debughook > 0 then
     //  OutputDebugString(PChar('Written: ' + BytesToStringRaw(bData)));
   finally
+    Unlock;
     strmData.Free;
   end;
 end;
