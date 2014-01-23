@@ -42,6 +42,7 @@ type
     procedure ResetChannel;
 
     function  TryUpgradeToWebsocket: Boolean;
+    procedure CheckConnection;
   protected
     procedure IntDispatch(aRequest, aResponse: TStream); override;
     function  CreateIndyClient: TIdHTTP; override;
@@ -160,6 +161,25 @@ begin
     end);
 end;
 
+procedure TROIndyHTTPWebsocketChannel.CheckConnection;
+begin
+  try
+    if IndyClient.Connected then
+      IndyClient.IOHandler.CheckForDisconnect(True, True)
+  except
+    IndyClient.Disconnect(False);
+  end;
+  if not IndyClient.Connected then
+  begin
+    if IndyClient.IOHandler <> nil then
+      IndyClient.IOHandler.Clear;
+    IndyClient.Connect;
+    if not IndyClient.IOHandler.IsWebsocket then   //not already upgraded?
+      TryUpgradeToWebsocket;
+    FTriedUpgrade := True; //one shot
+  end;
+end;
+
 function TROIndyHTTPWebsocketChannel.CreateIndyClient: TIdHTTP;
 var
   wsclient: TROIndyHTTPSocketIOClient;
@@ -231,6 +251,8 @@ begin
       aRequest.Write(C_RO_WS_NR, Length(C_RO_WS_NR));
       aRequest.Write(iMsgNr, SizeOf(iMsgNr));
       aRequest.Position := 0;
+
+      CheckConnection;
 
       //write
       IndyClient.IOHandler.Write(aRequest);

@@ -46,6 +46,8 @@ type
     FSocketIOHandshakeResponse: string;
     FSocketIO: TIdSocketIOHandling_Ext;
     FSocketIOContext: ISocketIOContext;
+    FSocketIOConnectBusy: Boolean;
+
     FHeartBeat: TTimer;
     procedure HeartBeatTimer(Sender: TObject);
     function  GetSocketIO: TIdSocketIOHandling;
@@ -242,6 +244,17 @@ begin
     IOHandler.Clear;
 
   FHeartBeat.Enabled := True;
+  if SocketIOCompatible and
+     not FSocketIOConnectBusy then
+  begin
+    FSocketIOConnectBusy := True;
+    try
+      TryUpgradeToWebsocket;     //socket.io connects using HTTP, so no seperate .Connect needed (only gives Connection closed gracefully exceptions because of new http command)
+    finally
+      FSocketIOConnectBusy := False;
+    end;
+  end
+  else
   inherited Connect;
 end;
 
@@ -325,8 +338,9 @@ begin
         if (IOHandler <> nil) then
           IOHandler.Clear;
 
-        Self.ConnectTimeout := 100;
-        Self.Connect;
+        Self.ConnectTimeout := 100;  //100ms otherwise GUI hangs too much -> todo: do it in background thread!
+        if not Connected then
+          Self.Connect;
         TryUpgradeToWebsocket;
       except
         //skip, just retried
@@ -373,6 +387,8 @@ function TIdHTTPWebsocketClient.TryUpgradeToWebsocket: Boolean;
 var
   sError: string;
 begin
+  if (IOHandler <> nil) and IOHandler.IsWebsocket then Exit(True);
+
   InternalUpgradeToWebsocket(False{no raise}, sError);
   Result := (sError = '');
 end;
@@ -381,6 +397,7 @@ procedure TIdHTTPWebsocketClient.UpgradeToWebsocket;
 var
   sError: string;
 begin
+  if not IOHandler.IsWebsocket then
   InternalUpgradeToWebsocket(True{raise}, sError);
 end;
 
@@ -392,7 +409,7 @@ var
   sKey, sResponseKey: string;
   sSocketioextended: string;
 begin
-  Assert(not IOHandler.IsWebsocket);
+  Assert((IOHandler = nil) or not IOHandler.IsWebsocket);
 
   strmResponse := TMemoryStream.Create;
   try
@@ -1094,16 +1111,14 @@ begin
       for i := 0 to l.Count - 1 do
       begin
         chn := TIdHTTPWebsocketClient(l.Items[i]);
+        ws  := chn.IOHandler as TIdIOHandlerWebsocket;
+        if ws.TryLock then     //IOHandler.Readable cannot be done during pending action!
+        try
         try
           //try to process all events
           while chn.IOHandler.HasData or
                 chn.IOHandler.Readable(0) do     //has some data
           begin
-            ws  := chn.IOHandler as TIdIOHandlerWebsocket;
-            //no pending dispatch active? (so actually we only read events here?)
-            if ws.TryLock then
-            begin
-              try
                 if strmEvent = nil then
                   strmEvent := TMemoryStream.Create;
                 strmEvent.Clear;
@@ -1115,9 +1130,6 @@ begin
 
                 //ignore ping/pong messages
                 if wscode in [wdcPing, wdcPong] then Continue;
-              finally
-                ws.Unlock;
-              end;
 
               //fire event
               //offload event dispatching to different thread! otherwise deadlocks possible? (do to synchronize)
@@ -1135,15 +1147,15 @@ begin
                   chn.AsyncDispatchEvent(string(swstext));
                 end;
               end;
-            end
-            else
-              sleep(1);
           end;
         except
           l := nil;
           FChannels.UnlockList;
           chn.ResetChannel;
           raise;
+          end;
+        finally
+          ws.Unlock;
         end;
       end;
 

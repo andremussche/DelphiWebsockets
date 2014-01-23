@@ -1038,10 +1038,10 @@ procedure TSocketIOContext.EmitEvent(const aEventName: string; const aData: ISup
   const aCallback: TSocketIOMsgJSON; const aOnError: TSocketIOError);
 begin
   if not Assigned(aCallback) then
-    FHandling.WriteSocketIOEvent(Self, '', aEventName, aData.AsJSon, nil, nil)
+    FHandling.WriteSocketIOEvent(Self, '', aEventName, '[' + aData.AsJSon + ']', nil, nil)
   else
   begin
-    FHandling.WriteSocketIOEventRef(Self, '', aEventName, aData.AsJSon,
+    FHandling.WriteSocketIOEventRef(Self, '', aEventName, '[' + aData.AsJSon + ']',
       procedure(const aData: string)
       begin
         aCallback(Self, SO(aData), nil);
@@ -1135,6 +1135,9 @@ procedure TSocketIOContext.ServerContextDestroy(AContext: TIdContext);
 begin
   Self.Context    := nil;
   Self.FIOHandler := nil;
+
+  if FHandling <> nil then
+    Self.FHandling.FreeConnection(AContext);
 end;
 
 procedure TSocketIOContext.SetConnectSend(const Value: Boolean);
