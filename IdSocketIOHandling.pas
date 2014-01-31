@@ -149,6 +149,7 @@ type
 
     procedure Lock;
     procedure UnLock;
+    function  ConnectionCount: Integer;
 
 //    procedure  EmitEventToAll(const aEventName: string; const aData: ISuperObject; const aCallback: TSocketIOMsgJSON = nil);
     function  NewConnection(const AContext: TIdContext): TSocketIOContext;overload;
@@ -190,6 +191,30 @@ begin
   FSocketIOEventCallback     := TDictionary<Integer,TSocketIOCallback>.Create;
   FSocketIOEventCallbackRef  := TDictionary<Integer,TSocketIOCallbackRef>.Create;
   FSocketIOErrorRef          := TDictionary<Integer,TSocketIOError>.Create;
+end;
+
+function TIdBaseSocketIOHandling.ConnectionCount: Integer;
+var
+  context: TSocketIOContext;
+begin
+  Lock;
+  try
+    Result := 0;
+
+    //note: is single connection?
+    for context in FConnections.Values do
+    begin
+      if context.IsDisconnected then Continue;
+      Inc(Result);
+    end;
+    for context in FConnectionsGUID.Values do
+    begin
+      if context.IsDisconnected then Continue;
+      Inc(Result);
+    end;
+  finally
+    UnLock;
+  end;
 end;
 
 destructor TIdBaseSocketIOHandling.Destroy;
@@ -1236,12 +1261,15 @@ var
   jsonarray: string;
   isendcount: Integer;
 begin
-  if aData.IsType(stArray) then
-    jsonarray := aData.AsString
-  else if aData.IsType(stString) then
-    jsonarray := '["' + aData.AsString + '"]'
-  else
-    jsonarray := '[' + aData.AsString + ']';
+  if aData <> nil then
+  begin
+    if aData.IsType(stArray) then
+      jsonarray := aData.AsString
+    else if aData.IsType(stString) then
+      jsonarray := '["' + aData.AsString + '"]'
+    else
+      jsonarray := '[' + aData.AsString + ']';
+  end;
 
   Lock;
   try
@@ -1278,7 +1306,7 @@ begin
     end;
 
     if isendcount = 0 then
-      raise EIdSocketIoUnhandledMessage.Create('No socket.io connections!');
+      raise EIdSocketIoUnhandledMessage.Create('Cannot emit: no socket.io connections!');
   finally
     UnLock;
   end;
@@ -1325,7 +1353,7 @@ begin
     end;
 
     if isendcount = 0 then
-      raise EIdSocketIoUnhandledMessage.Create('No socket.io connections!');
+      raise EIdSocketIoUnhandledMessage.Create('Cannot send: no socket.io connections!');
   finally
     UnLock;
   end;
