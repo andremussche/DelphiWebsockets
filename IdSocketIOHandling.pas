@@ -28,11 +28,20 @@ type
 
   ISocketIOContext = interface
     ['{ACCAC678-054C-4D75-8BAD-5922F55623AB}']
+    function GetCustomData: TObject;
+    function GetOwnsCustomData: Boolean;
+    procedure SetCustomData(const Value: TObject);
+    procedure SetOwnsCustomData(const Value: Boolean);
+
+    property CustomData: TObject     read GetCustomData    write SetCustomData;
+    property OwnsCustomData: Boolean read GetOwnsCustomData write SetOwnsCustomData;
+
     function ResourceName: string;
     function PeerIP: string;
     function PeerPort: Integer;
 
-    procedure EmitEvent(const aEventName: string; const aData: ISuperObject; const aCallback: TSocketIOMsgJSON = nil; const aOnError: TSocketIOError = nil);
+    procedure EmitEvent(const aEventName: string; const aData: ISuperObject; const aCallback: TSocketIOMsgJSON = nil; const aOnError: TSocketIOError = nil);overload;
+    procedure EmitEvent(const aEventName: string; const aData: string; const aCallback: TSocketIOMsgJSON = nil; const aOnError: TSocketIOError = nil);overload;
     procedure Send(const aData: string; const aCallback: TSocketIOMsgJSON = nil; const aOnError: TSocketIOError = nil);
     procedure SendJSON(const aJSON: ISuperObject; const aCallback: TSocketIOMsgJSON = nil; const aOnError: TSocketIOError = nil);
   end;
@@ -45,9 +54,15 @@ type
     FConnectSend: Boolean;
     FGUID: string;
     FPeerIP: string;
+    FCustomData: TObject;
+    FOwnsCustomData: Boolean;
     procedure SetContext(const Value: TIdContext);
     procedure SetConnectSend(const Value: Boolean);
     procedure SetPingSend(const Value: Boolean);
+    function GetCustomData: TObject;
+    function GetOwnsCustomData: Boolean;
+    procedure SetCustomData(const Value: TObject);
+    procedure SetOwnsCustomData(const Value: Boolean);
   protected
     FHandling: TIdBaseSocketIOHandling;
     FContext: TIdContext;
@@ -70,18 +85,21 @@ type
     function ResourceName: string;
     function PeerIP: string;
     function PeerPort: Integer;
+    function IsDisconnected: Boolean;
 
     property GUID: string         read FGUID;
     property Context: TIdContext  read FContext write SetContext;
     property PingSend: Boolean    read FPingSend write SetPingSend;
     property ConnectSend: Boolean read FConnectSend write SetConnectSend;
 
-    function IsDisconnected: Boolean;
+    property CustomData: TObject     read GetCustomData    write SetCustomData;
+    property OwnsCustomData: Boolean read GetOwnsCustomData write SetOwnsCustomData;
 
     //todo: OnEvent per socket
     //todo: store session info per connection (see Socket.IO Set + Get -> Storing data associated to a client)
     //todo: namespace using "Of"
-    procedure EmitEvent(const aEventName: string; const aData: ISuperObject; const aCallback: TSocketIOMsgJSON = nil; const aOnError: TSocketIOError = nil);
+    procedure EmitEvent(const aEventName: string; const aData: ISuperObject; const aCallback: TSocketIOMsgJSON = nil; const aOnError: TSocketIOError = nil);overload;
+    procedure EmitEvent(const aEventName: string; const aData: string; const aCallback: TSocketIOMsgJSON = nil; const aOnError: TSocketIOError = nil);overload;
 //    procedure BroadcastEventToOthers(const aEventName: string; const aData: ISuperObject; const aCallback: TSocketIOMsgJSON = nil);
     procedure Send(const aData: string; const aCallback: TSocketIOMsgJSON = nil; const aOnError: TSocketIOError = nil);
     procedure SendJSON(const aJSON: ISuperObject; const aCallback: TSocketIOMsgJSON = nil; const aOnError: TSocketIOError = nil);
@@ -163,12 +181,15 @@ type
     procedure OnEvent     (const aEventName: string; const aCallback: TSocketIOEvent);
     procedure OnConnection(const aCallback: TSocketIONotify);
     procedure OnDisconnect(const aCallback: TSocketIONotify);
+
+    procedure EnumerateSockets(const aEachSocketCallback: TSocketIONotify);
   end;
 
   TIdSocketIOHandling = class(TIdBaseSocketIOHandling)
   public
     procedure Send(const aMessage: string; const aCallback: TSocketIOMsgJSON = nil; const aOnError: TSocketIOError = nil);
-    procedure Emit(const aEventName: string; const aData: ISuperObject; const aCallback: TSocketIOMsgJSON = nil; const aOnError: TSocketIOError = nil);
+    procedure Emit(const aEventName: string; const aData: ISuperObject; const aCallback: TSocketIOMsgJSON = nil; const aOnError: TSocketIOError = nil);overload;
+    //procedure Emit(const aEventName: string; const aData: string; const aCallback: TSocketIOMsgJSON = nil; const aOnError: TSocketIOError = nil);overload;
   end;
 
 implementation
@@ -249,6 +270,22 @@ begin
   UnLock;
   FLock.Free;
   inherited;
+end;
+
+procedure TIdBaseSocketIOHandling.EnumerateSockets(
+  const aEachSocketCallback: TSocketIONotify);
+var socket: TSocketIOContext;
+begin
+  Assert(Assigned(aEachSocketCallback));
+  Lock;
+  try
+    for socket in FConnections.Values do
+      aEachSocketCallback(socket);
+    for socket in FConnectionsGUID.Values do
+      aEachSocketCallback(socket);
+  finally
+    Unlock;
+  end;
 end;
 
 procedure TIdBaseSocketIOHandling.FreeConnection(
@@ -1056,22 +1093,39 @@ begin
   FreeAndNil(FQueue);
   UnLock;
   FLock.Free;
+  FCustomData.Free;
   inherited;
 end;
 
-procedure TSocketIOContext.EmitEvent(const aEventName: string; const aData: ISuperObject;
+procedure TSocketIOContext.EmitEvent(const aEventName, aData: string;
   const aCallback: TSocketIOMsgJSON; const aOnError: TSocketIOError);
 begin
   if not Assigned(aCallback) then
-    FHandling.WriteSocketIOEvent(Self, '', aEventName, '[' + aData.AsJSon + ']', nil, nil)
+    FHandling.WriteSocketIOEvent(Self, '', aEventName, '[' + aData + ']', nil, nil)
   else
   begin
-    FHandling.WriteSocketIOEventRef(Self, '', aEventName, '[' + aData.AsJSon + ']',
+    FHandling.WriteSocketIOEventRef(Self, '', aEventName, '[' + aData + ']',
       procedure(const aData: string)
       begin
         aCallback(Self, SO(aData), nil);
       end, aOnError);
   end;
+end;
+
+procedure TSocketIOContext.EmitEvent(const aEventName: string; const aData: ISuperObject;
+  const aCallback: TSocketIOMsgJSON; const aOnError: TSocketIOError);
+begin
+  EmitEvent(aEventName, aData.AsJSon, aCallback, aOnError);
+end;
+
+function TSocketIOContext.GetCustomData: TObject;
+begin
+  Result := FCustomData;
+end;
+
+function TSocketIOContext.GetOwnsCustomData: Boolean;
+begin
+  Result := FOwnsCustomData;
 end;
 
 function TSocketIOContext.IsDisconnected: Boolean;
@@ -1180,6 +1234,16 @@ begin
 
   if FContext is TIdServerWSContext then
     (FContext as TIdServerWSContext).OnDestroy := Self.ServerContextDestroy;
+end;
+
+procedure TSocketIOContext.SetCustomData(const Value: TObject);
+begin
+  FCustomData := Value;
+end;
+
+procedure TSocketIOContext.SetOwnsCustomData(const Value: Boolean);
+begin
+  FOwnsCustomData := Value;
 end;
 
 procedure TSocketIOContext.SetPingSend(const Value: Boolean);
