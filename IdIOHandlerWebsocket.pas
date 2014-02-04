@@ -37,6 +37,7 @@ type
     FCloseCode: Integer;
     FClosing: Boolean;
     FLastActivityTime: TDateTime;
+    FLastPingTime: TDateTime;
     class var FUseSingleWriteThread: Boolean;
   protected
     FMessageStream: TMemoryStream;
@@ -91,6 +92,7 @@ type
     procedure WriteBufferFlush(AByteCount: Integer); override;
 
     property  LastActivityTime: TDateTime read FLastActivityTime write FLastActivityTime;
+    property  LastPingTime: TDateTime read FLastPingTime write FLastPingTime;
 
     class property UseSingleWriteThread: Boolean read FUseSingleWriteThread write FUseSingleWriteThread;
   end;

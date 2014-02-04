@@ -687,6 +687,8 @@ var
   ws: TIdIOHandlerWebsocket;
 begin
   ws  := IOHandler as TIdIOHandlerWebsocket;
+  ws.LastPingTime := Now;
+
   //socket.io?
   if SocketIOCompatible and ws.IsWebsocket then
   begin
@@ -1143,7 +1145,7 @@ begin
          (chn.Socket.Binding.Handle <> INVALID_SOCKET) then
       begin
         //more than 10s nothing done? then send ping
-        if SecondsBetween(Now, ws.LastActivityTime) > 10 then
+        if SecondsBetween(Now, ws.LastPingTime) > 10 then
           if chn.CheckConnection then
           try
             chn.Ping;

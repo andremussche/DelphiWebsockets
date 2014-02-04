@@ -210,6 +210,7 @@ begin
     if Result then
     begin
       Self.IndyClient.IOHandler.InputBuffer.Clear;
+      Self.IndyClient.IOHandler.ReadTimeout := Self.IndyClient.ReadTimeout;
       //background wait for data in single thread
       TIdWebsocketMultiReadThread.Instance.AddClient(Self.IndyClient);
     end;
