@@ -133,7 +133,7 @@ begin
       Assert(aSocketIOHandler <> nil);
       aSocketIOHandler.WriteDisConnect(context);
     end;
-
+    context.IOHandler.Clear;
     AThread.Data := nil;
   end;
 end;

@@ -4,7 +4,8 @@ interface
 
 uses
   TestFramework,
-  IdHTTPWebsocketClient, IdServerWebsocketContext, IdWebsocketServer;
+  IdHTTPWebsocketClient, IdServerWebsocketContext, IdWebsocketServer,
+  IdContext, IdCustomHTTPServer;
 
 type
   TTextCallback = reference to procedure(aText: string);
@@ -14,7 +15,11 @@ type
     class var IndyHTTPWebsocketServer1: TIdWebsocketServer;
     class var IndyHTTPWebsocketClient1: TIdHTTPWebsocketClient;
   protected
+    FLastWSMsg: string;
     FLastSocketIOMsg: string;
+    procedure HandleHTTPServerCommandGet(AContext: TIdContext; ARequestInfo: TIdHTTPRequestInfo; AResponseInfo: TIdHTTPResponseInfo);
+    procedure WebsocketTextMessage(const aData: string);
+    procedure HandleWebsocketTextMessage(const AContext: TIdServerWSContext; const aText: string);
   public
     procedure SetUp; override;
     procedure TearDown; override;
@@ -22,6 +27,9 @@ type
     procedure CreateObjects;
 
     procedure StartServer;
+
+    procedure TestPlainHttp;
+    procedure TestWebsocketMsg;
 
     procedure TestSocketIOMsg;
     procedure TestSocketIOCallback;
@@ -37,7 +45,7 @@ implementation
 
 uses
   Windows, Forms, DateUtils, SysUtils, Classes,
-  IdSocketIOHandling, superobject;
+  IdSocketIOHandling, superobject, IdIOHandlerWebsocket;
 
 function MaxWait(aProc: TBooleanFunction; aMaxWait_msec: Integer): Boolean;
 var
@@ -89,9 +97,49 @@ begin
   IndyHTTPWebsocketServer1.Free;
 end;
 
+procedure TTestWebSockets.HandleHTTPServerCommandGet(AContext: TIdContext;
+  ARequestInfo: TIdHTTPRequestInfo; AResponseInfo: TIdHTTPResponseInfo);
+begin
+  if ARequestInfo.Document = '/index.html' then
+    AResponseInfo.ContentText := 'dummy index.html';
+end;
+
 procedure TTestWebSockets.StartServer;
 begin
   IndyHTTPWebsocketServer1.Active := True;
+end;
+
+procedure TTestWebSockets.TestPlainHttp;
+var
+  strm: TMemoryStream;
+  s: string;
+  client: TIdHTTPWebsocketClient;
+begin
+  client := TIdHTTPWebsocketClient.Create(nil);
+  try
+    client.Host  := 'localhost';
+    client.Port  := 8099;
+    client.SocketIOCompatible := False;  //plain http now
+    IndyHTTPWebsocketServer1.OnCommandGet   := HandleHTTPServerCommandGet;
+    IndyHTTPWebsocketServer1.OnCommandOther := HandleHTTPServerCommandGet;
+
+    strm := TMemoryStream.Create;
+    try
+      client.Get('http://localhost:8099/index.html', strm);
+      with TStreamReader.Create(strm) do
+      begin
+        strm.Position := 0;
+        s := ReadToEnd;
+        Free;
+      end;
+
+      CheckEquals('dummy index.html', s);
+    finally
+      strm.Free;
+    end;
+  finally
+    client.Free;
+  end;
 end;
 
 procedure TTestWebSockets.TestSocketIOCallback;
@@ -188,7 +236,9 @@ end;
 procedure TTestWebSockets.TestSocketIOMsg;
 begin
   //disconnect: mag geen AV's daarna geven!
-  IndyHTTPWebsocketClient1.Disconnect(False);
+  IndyHTTPWebsocketClient1.Disconnect(True);
+  IndyHTTPWebsocketClient1.ResetChannel;
+  IndyHTTPWebsocketClient1.SocketIOCompatible := True;
   IndyHTTPWebsocketClient1.Connect;
   IndyHTTPWebsocketClient1.UpgradeToWebsocket;
 
@@ -229,6 +279,46 @@ begin
   IndyHTTPWebsocketClient1.UpgradeToWebsocket;
   IndyHTTPWebsocketClient1.SocketIO.Send('test message');
 end;
+
+procedure TTestWebSockets.TestWebsocketMsg;
+var
+  client: TIdHTTPWebsocketClient;
+begin
+  client := TIdHTTPWebsocketClient.Create(nil);
+  try
+    client.Host  := 'localhost';
+    client.Port  := 8099;
+    client.SocketIOCompatible := False;
+    client.OnTextData         := WebsocketTextMessage;
+    IndyHTTPWebsocketServer1.OnMessageText := HandleWebsocketTextMessage;
+
+    //client.Connect;
+    client.UpgradeToWebsocket;
+    client.IOHandler.Write('websocket client to server');
+
+    MaxWait(
+      function: Boolean
+      begin
+        Result := FLastWSMsg <> '';
+      end, 10 * 1000);
+    CheckEquals('websocket server to client', FLastWSMsg);
+  finally
+    client.Free;
+  end;
+end;
+
+procedure TTestWebSockets.HandleWebsocketTextMessage(
+  const AContext: TIdServerWSContext; const aText: string);
+begin
+  if aText = 'websocket client to server' then
+    AContext.IOHandler.Write('websocket server to client');
+end;
+
+procedure TTestWebSockets.WebsocketTextMessage(const aData: string);
+begin
+  FLastWSMsg := aData;
+end;
+
 
 end.
 

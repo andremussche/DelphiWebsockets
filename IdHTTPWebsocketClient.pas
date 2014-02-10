@@ -22,8 +22,8 @@ uses
   IdSocketIOHandling;
 
 type
-  TDataBinEvent    = procedure(const aData: TStream) of object;
-  TDataStringEvent = procedure(const aData: string) of object;
+  TWebsocketMsgBin  = procedure(const aData: TStream) of object;
+  TWebsocketMsgText = procedure(const aData: string) of object;
 
   TIdHTTPWebsocketClient = class;
   TSocketIOMsg = procedure(const AClient: TIdHTTPWebsocketClient; const aText: string; aMsgNr: Integer) of object;
@@ -35,12 +35,12 @@ type
   private
     FWSResourceName: string;
     FHash: TIdHashSHA1;
-    FOnData: TDataBinEvent;
-    FOnTextData: TDataStringEvent;
+    FOnData: TWebsocketMsgBin;
+    FOnTextData: TWebsocketMsgText;
     function  GetIOHandlerWS: TIdIOHandlerWebsocket;
     procedure SetIOHandlerWS(const Value: TIdIOHandlerWebsocket);
-    procedure SetOnData(const Value: TDataBinEvent);
-    procedure SetOnTextData(const Value: TDataStringEvent);
+    procedure SetOnData(const Value: TWebsocketMsgBin);
+    procedure SetOnTextData(const Value: TWebsocketMsgText);
   protected
     FSocketIOCompatible: Boolean;
     FSocketIOHandshakeResponse: string;
@@ -65,6 +65,7 @@ type
     function  TryUpgradeToWebsocket: Boolean;
     procedure UpgradeToWebsocket;
 
+    function  TryLock: Boolean;
     procedure Lock;
     procedure UnLock;
 
@@ -75,8 +76,10 @@ type
     procedure Ping;
 
     property  IOHandler: TIdIOHandlerWebsocket read GetIOHandlerWS write SetIOHandlerWS;
-    property  OnBinData : TDataBinEvent read FOnData write SetOnData;
-    property  OnTextData: TDataStringEvent read FOnTextData write SetOnTextData;
+
+    //websockets
+    property  OnBinData : TWebsocketMsgBin read FOnData write SetOnData;
+    property  OnTextData: TWebsocketMsgText read FOnTextData write SetOnTextData;
 
     //https://github.com/LearnBoost/socket.io-spec
     property  SocketIOCompatible: Boolean read FSocketIOCompatible write FSocketIOCompatible;
@@ -428,14 +431,19 @@ begin
 
       Connect;
       Result := Connected;
-      if Result then
-        Result := TryUpgradeToWebsocket
+      //if Result then
+      //  Result := TryUpgradeToWebsocket     already done in connect
     except
       Result := False;
     end
   finally
     UnLock;
   end;
+end;
+
+function TIdHTTPWebsocketClient.TryLock: Boolean;
+begin
+  Result := System.TMonitor.TryEnter(Self);
 end;
 
 function TIdHTTPWebsocketClient.TryUpgradeToWebsocket: Boolean;
@@ -450,7 +458,7 @@ begin
     Result := (sError = '');
   finally
     UnLock;
-  end;
+   end;
 end;
 
 procedure TIdHTTPWebsocketClient.UnLock;
@@ -480,6 +488,8 @@ var
   sSocketioextended: string;
 begin
   Assert((IOHandler = nil) or not IOHandler.IsWebsocket);
+  //remove from thread during connection handling
+  TIdWebsocketMultiReadThread.Instance.RemoveClient(Self);
 
   strmResponse := TMemoryStream.Create;
   try
@@ -721,6 +731,8 @@ begin
   if IOHandler <> nil then
   begin
     IOHandler.InputBuffer.Clear;
+    IOHandler.BusyUpgrading := False;
+    IOHandler.IsWebsocket   := False;
     //close/disconnect internal socket
     //ws := IndyClient.IOHandler as TIdIOHandlerWebsocket;
     //ws.Close;  done in disconnect below
@@ -734,30 +746,30 @@ begin
   SetIOHandler(Value);
 end;
 
-procedure TIdHTTPWebsocketClient.SetOnData(const Value: TDataBinEvent);
+procedure TIdHTTPWebsocketClient.SetOnData(const Value: TWebsocketMsgBin);
 begin
 //  if not Assigned(Value) and not Assigned(FOnTextData) then
 //    TIdWebsocketMultiReadThread.Instance.RemoveClient(Self);
 
   FOnData := Value;
 
-  if Assigned(Value) and
-     (Self.IOHandler as TIdIOHandlerWebsocket).IsWebsocket
-  then
-    TIdWebsocketMultiReadThread.Instance.AddClient(Self);
+//  if Assigned(Value) and
+//     (Self.IOHandler as TIdIOHandlerWebsocket).IsWebsocket
+//  then
+//    TIdWebsocketMultiReadThread.Instance.AddClient(Self);
 end;
 
-procedure TIdHTTPWebsocketClient.SetOnTextData(const Value: TDataStringEvent);
+procedure TIdHTTPWebsocketClient.SetOnTextData(const Value: TWebsocketMsgText);
 begin
 //  if not Assigned(Value) and not Assigned(FOnData) then
 //    TIdWebsocketMultiReadThread.Instance.RemoveClient(Self);
 
   FOnTextData := Value;
 
-  if Assigned(Value) and
-     (Self.IOHandler as TIdIOHandlerWebsocket).IsWebsocket
-  then
-    TIdWebsocketMultiReadThread.Instance.AddClient(Self);
+//  if Assigned(Value) and
+//     (Self.IOHandler as TIdIOHandlerWebsocket).IsWebsocket
+//  then
+//    TIdWebsocketMultiReadThread.Instance.AddClient(Self);
 end;
 
 { TIdHTTPSocketIOClient }
@@ -1139,7 +1151,9 @@ begin
       chn := TIdHTTPWebsocketClient(l.Items[i]);
       ws  := chn.IOHandler as TIdIOHandlerWebsocket;
       //valid?
-      if (chn.Socket <> nil) and
+      if (chn.IOHandler <> nil) and
+         (chn.IOHandler.IsWebsocket) and
+         (chn.Socket <> nil) and
          (chn.Socket.Binding <> nil) and
          (chn.Socket.Binding.Handle > 0) and
          (chn.Socket.Binding.Handle <> INVALID_SOCKET) then
@@ -1155,14 +1169,18 @@ begin
       end
       else if not chn.Connected then
       begin
+        if chn.TryLock then
         try
-          if ws <> nil then
-            ws.LastActivityTime := Now;
-          chn.ConnectTimeout  := 250; //250ms otherwise too much delay? todo: seperate ping/connnect thread
-          chn.Connect;
-          chn.TryUpgradeToWebsocket;
-        except
-          //just try
+          try
+            if ws <> nil then
+              ws.LastActivityTime := Now;
+            chn.ConnectTimeout  := 250; //250ms otherwise too much delay? todo: seperate ping/connnect thread
+            chn.TryUpgradeToWebsocket;
+          except
+            //just try
+          end;
+        finally
+          chn.Unlock;
         end;
       end;
     end;
@@ -1194,6 +1212,8 @@ begin
       chn := TIdHTTPWebsocketClient(l.Items[i]);
       //valid?
       if //not chn.Busy and    also take busy channels (will be ignored later), otherwise we have to break/reset for each RO function execution
+         (chn.IOHandler <> nil) and
+         (chn.IOHandler.IsWebsocket) and
          (chn.Socket <> nil) and
          (chn.Socket.Binding <> nil) and
          (chn.Socket.Binding.Handle > 0) and

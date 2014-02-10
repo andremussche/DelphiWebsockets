@@ -11,8 +11,10 @@ program UnitTestWebsockets;
 }
 
 {$IFDEF CONSOLE_TESTRUNNER}
-{$APPTYPE CONSOLE}
+  {$APPTYPE CONSOLE}
 {$ENDIF}
+
+{$IFNDEF USE_JEDI_JCL} {$MESSAGE ERROR 'Must define "USE_JEDI_JCL" for location info of errors'} {$ENDIF}
 
 {$R *.RES}
 

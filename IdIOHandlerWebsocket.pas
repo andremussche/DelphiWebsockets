@@ -234,6 +234,18 @@ procedure TIdIOHandlerWebsocket.Clear;
 begin
   FWSInputBuffer.Clear;
   InputBuffer.Clear;
+  FBusyUpgrading := False;
+  FIsWebsocket := False;
+  FClosing := False;
+  FClosing := False;
+  FExtensionBits := [];
+  FCloseReason := '';
+  FCloseCode := 0;
+  FLastActivityTime := 0;
+  FLastPingTime := 0;
+  FWriteTextToTarget := False;
+  FCloseCodeSend := False;
+  FPendingWriteCount := 0;
 end;
 
 procedure TIdIOHandlerWebsocket.Close;
