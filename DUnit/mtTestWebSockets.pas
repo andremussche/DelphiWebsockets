@@ -99,9 +99,16 @@ end;
 
 procedure TTestWebSockets.HandleHTTPServerCommandGet(AContext: TIdContext;
   ARequestInfo: TIdHTTPRequestInfo; AResponseInfo: TIdHTTPResponseInfo);
+var sfile: string;
 begin
   if ARequestInfo.Document = '/index.html' then
-    AResponseInfo.ContentText := 'dummy index.html';
+    AResponseInfo.ContentText := 'dummy index.html'
+  else
+  begin
+    sfile := ExtractFilePath(Application.ExeName) + ARequestInfo.Document;
+    if FileExists(sfile) then
+      AResponseInfo.ContentStream := TFileStream.Create(sfile, fmOpenRead);
+  end;
 end;
 
 procedure TTestWebSockets.StartServer;

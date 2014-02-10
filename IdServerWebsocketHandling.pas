@@ -180,7 +180,7 @@ begin
      Sec-WebSocket-Version: 13 *)
 
   //Connection: Upgrade
-  if not SameText('Upgrade', ARequestInfo.Connection) then
+  if not ContainsText(ARequestInfo.Connection, 'Upgrade') then   //Firefox uses "keep-alive, Upgrade"
   begin
     //initiele ondersteuning voor socket.io
     if SameText(ARequestInfo.document , '/socket.io/1/') then
