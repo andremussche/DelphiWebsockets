@@ -1175,7 +1175,8 @@ begin
             if ws <> nil then
               ws.LastActivityTime := Now;
             chn.ConnectTimeout  := 250; //250ms otherwise too much delay? todo: seperate ping/connnect thread
-            chn.TryUpgradeToWebsocket;
+            if (chn.Host <> '') and (chn.Port > 0) then
+              chn.TryUpgradeToWebsocket;
           except
             //just try
           end;
