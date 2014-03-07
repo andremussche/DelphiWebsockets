@@ -1242,7 +1242,8 @@ begin
             if ws <> nil then
               ws.LastActivityTime := Now;
             chn.ConnectTimeout  := 1000;
-            chn.TryUpgradeToWebsocket;
+            if (chn.Host <> '') and (chn.Port > 0) then
+              chn.TryUpgradeToWebsocket;
           except
             //just try
           end;

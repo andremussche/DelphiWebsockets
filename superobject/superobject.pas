@@ -6062,10 +6062,16 @@ function TSuperRttiContext.FromJson(TypeInfo: PTypeInfo; const obj: ISuperObject
         begin
           Result := True;
           if Value.Kind <> tkClass then
-            Value := GetTypeData(TypeInfo).ClassType.Create;
+          begin
+            //only create if emtpy
+            if Value.IsEmpty then
+              Value := GetTypeData(TypeInfo).ClassType.Create;
+          end;
           for f in Context.GetType(Value.AsObject.ClassType).GetFields do
             if f.FieldType <> nil then
             begin
+              //get current value/object (so objects are not created every time and overwritten -> mem leak
+              v := f.GetValue(Value.AsObject);
               Result := FromJson(f.FieldType.Handle, GetFieldDefault(f, obj.AsObject[GetFieldName(f)]), v);
               if Result then
                 f.SetValue(Value.AsObject, v) else
@@ -6133,6 +6139,7 @@ function TSuperRttiContext.FromJson(TypeInfo: PTypeInfo; const obj: ISuperObject
         Result := True;
         for i := 0 to i - 1 do
         begin
+          //val.Make(pb, el, val);  copy old value
           Result := FromJson(el, obj.AsArray[i], val);
           if not Result then
             Break;
