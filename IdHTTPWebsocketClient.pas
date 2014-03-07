@@ -123,10 +123,16 @@ type
   end;
   *)
 
+  TWSThreadList = class(TThreadList)
+  public
+    function Count: Integer;
+  end;
+
   TIdWebsocketMultiReadThread = class(TThread)
   private
     class var FInstance: TIdWebsocketMultiReadThread;
   protected
+    FReadTimeout: Integer;
     FTempHandle: THandle;
     FPendingBreak: Boolean;
     Freadset, Fexceptionset: TFDSet;
@@ -136,6 +142,8 @@ type
     procedure BreakSelectWait;
   protected
     FChannels: TThreadList;
+    FReconnectlist: TWSThreadList;
+    FReconnectThread: TIdWebsocketQueueThread;
     procedure ReadFromAllChannels;
     procedure PingAllChannels;
 
@@ -148,6 +156,8 @@ type
 
     procedure AddClient   (aChannel: TIdHTTPWebsocketClient);
     procedure RemoveClient(aChannel: TIdHTTPWebsocketClient);
+
+    property ReadTimeout: Integer read FReadTimeout write FReadTimeout default 5000;
 
     class function  Instance: TIdWebsocketMultiReadThread;
     class procedure RemoveInstance;
@@ -287,18 +297,17 @@ begin
     if SocketIOCompatible and
        not FSocketIOConnectBusy then
     begin
-      FSocketIOConnectBusy := True;
-      try
+      //FSocketIOConnectBusy := True;
+      //try
         TryUpgradeToWebsocket;     //socket.io connects using HTTP, so no seperate .Connect needed (only gives Connection closed gracefully exceptions because of new http command)
-      finally
-        FSocketIOConnectBusy := False;
-      end;
+      //finally
+      //  FSocketIOConnectBusy := False;
+      //end;
     end
     else
     begin
       //clear inputbuffer, otherwise it can't connect :(
       if (IOHandler <> nil) then IOHandler.Clear;
-
       inherited Connect;
     end;
   finally
@@ -450,6 +459,7 @@ function TIdHTTPWebsocketClient.TryUpgradeToWebsocket: Boolean;
 var
   sError: string;
 begin
+  FSocketIOConnectBusy := True;
   Lock;
   try
     if (IOHandler <> nil) and IOHandler.IsWebsocket then Exit(True);
@@ -457,6 +467,7 @@ begin
     InternalUpgradeToWebsocket(False{no raise}, sError);
     Result := (sError = '');
   finally
+    FSocketIOConnectBusy := False;
     UnLock;
    end;
 end;
@@ -667,6 +678,7 @@ begin
     //upgrade succesful
     IOHandler.IsWebsocket := True;
     aFailedReason := '';
+    Assert(Connected);
 
     if SocketIOCompatible then
     begin
@@ -1049,6 +1061,9 @@ end;
 procedure TIdWebsocketMultiReadThread.AfterConstruction;
 begin
   inherited;
+
+  ReadTimeout := 5000;
+
   FChannels := TThreadList.Create;
   FillChar(Freadset, SizeOf(Freadset), 0);
   FillChar(Fexceptionset, SizeOf(Fexceptionset), 0);
@@ -1173,24 +1188,82 @@ begin
       end
       else if not chn.Connected then
       begin
-        if chn.TryLock then
+        if (ws <> nil) and
+           (SecondsBetween(Now, ws.LastActivityTime) < 5)
+        then
+            Continue;
+
+        if FReconnectlist = nil then
+          FReconnectlist := TWSThreadList.Create;
+        //if chn.TryLock then
+        FReconnectlist.Add(chn);
+      end;
+    end;
+  finally
+    FChannels.UnlockList;
+  end;
+
+  //reconnect needed? (in background)
+  if FReconnectlist.Count > 0 then
+  begin
+    if FReconnectThread = nil then
+      FReconnectThread := TIdWebsocketQueueThread.Create(False{direct start});
+    FReconnectThread.QueueEvent(
+      procedure
+      var
+        l: TList;
+        chn: TIdHTTPWebsocketClient;
+      begin
+        while FReconnectlist.Count > 0 do
+        begin
+          chn := nil;
         try
+            //get first one
+            l := FReconnectlist.LockList;
+            try
+              if l.Count <= 0 then Exit;
+
+              chn := TObject(l.Items[0]) as TIdHTTPWebsocketClient;
+              if not chn.TryLock then
+              begin
+                l.Delete(0);
+                chn := nil;
+                Continue;
+              end;
+            finally
+              FReconnectlist.UnlockList;
+            end;
+
+            //try reconnect
+            ws := chn.IOHandler as TIdIOHandlerWebsocket;
+            if ( (ws = nil) or
+                 (SecondsBetween(Now, ws.LastActivityTime) >= 5) ) then
+            begin
           try
             if ws <> nil then
               ws.LastActivityTime := Now;
-            chn.ConnectTimeout  := 250; //250ms otherwise too much delay? todo: seperate ping/connnect thread
+            chn.ConnectTimeout  := 1000;
             if (chn.Host <> '') and (chn.Port > 0) then
               chn.TryUpgradeToWebsocket;
           except
             //just try
           end;
+            end;
+
+            //remove from todo list
+            l := FReconnectlist.LockList;
+            try
+              if l.Count > 0 then
+                l.Delete(0);
+            finally
+              FReconnectlist.UnlockList;
+            end;
         finally
+            if chn <> nil then
           chn.Unlock;
         end;
       end;
-    end;
-  finally
-    FChannels.UnlockList;
+      end);
   end;
 end;
 
@@ -1247,9 +1320,8 @@ begin
   Fexceptionset.fd_array[0] := FTempHandle;
 
   //wait 15s till some data
-  Finterval.tv_sec  := 5; //5s
-  {$MESSAGE HINT 'make wait timeout configurable + less in case of reconnect '}
-  Finterval.tv_usec := 0;
+  Finterval.tv_sec  := Self.ReadTimeout div 1000; //5s
+  Finterval.tv_usec := Self.ReadTimeout mod 1000;
 
   //nothing to wait for? then sleep some time to prevent 100% CPU
   if iResult = 0 then
@@ -1349,7 +1421,15 @@ procedure TIdWebsocketMultiReadThread.RemoveClient(
   aChannel: TIdHTTPWebsocketClient);
 begin
   if Self = nil then Exit;
+
+  aChannel.Lock;
+  try
   FChannels.Remove(aChannel);
+    if FReconnectlist <> nil then
+      FReconnectlist.Remove(aChannel);
+  finally
+    aChannel.UnLock;
+  end;
   BreakSelectWait;
 end;
 
@@ -1413,6 +1493,19 @@ begin
     FInstance.Terminate;
     FInstance.WaitFor;
     FreeAndNil(FInstance);
+  end;
+end;
+
+{ TWSThreadList }
+
+function TWSThreadList.Count: Integer;
+var l: TList;
+begin
+  l := LockList;
+  try
+    Result := l.Count;
+  finally
+    UnlockList;
   end;
 end;
 

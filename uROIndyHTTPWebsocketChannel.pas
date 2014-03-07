@@ -153,12 +153,20 @@ begin
   strmevent.CopyFrom(aEvent, aEvent.Size);
 
   //events during dispatch? channel is busy so offload event dispatching to different thread!
-  CreateAnonymousThread(
+  TIdWebsocketDispatchThread.Instance.QueueEvent(
     procedure
     begin
       IntDispatchEvent(strmevent);
       strmevent.Free;
     end);
+
+  //events during dispatch? channel is busy so offload event dispatching to different thread!
+//  CreateAnonymousThread(
+//    procedure
+//    begin
+//      IntDispatchEvent(strmevent);
+//      strmevent.Free;
+//    end);
 end;
 
 procedure TROIndyHTTPWebsocketChannel.CheckConnection;
