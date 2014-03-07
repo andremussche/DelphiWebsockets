@@ -491,6 +491,10 @@ begin
   //remove from thread during connection handling
   TIdWebsocketMultiReadThread.Instance.RemoveClient(Self);
 
+  //reset pending data
+  if IOHandler <> nil then
+    IOHandler.Clear;
+
   strmResponse := TMemoryStream.Create;
   try
     //special socket.io handling, see https://github.com/LearnBoost/socket.io-spec
