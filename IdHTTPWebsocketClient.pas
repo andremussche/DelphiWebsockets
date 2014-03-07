@@ -497,17 +497,25 @@ var
   i: Integer;
   sKey, sResponseKey: string;
   sSocketioextended: string;
+  bLocked: boolean;
 begin
   Assert((IOHandler = nil) or not IOHandler.IsWebsocket);
   //remove from thread during connection handling
   TIdWebsocketMultiReadThread.Instance.RemoveClient(Self);
 
-  //reset pending data
-  if IOHandler <> nil then
-    IOHandler.Clear;
-
+  bLocked := False;
   strmResponse := TMemoryStream.Create;
+  Self.Lock;
   try
+    //reset pending data
+    if IOHandler <> nil then
+    begin
+      IOHandler.Lock;
+      bLocked := True;
+      if IOHandler.IsWebsocket then Exit;
+      IOHandler.Clear;
+    end;
+
     //special socket.io handling, see https://github.com/LearnBoost/socket.io-spec
     if SocketIOCompatible then
     begin
@@ -692,6 +700,10 @@ begin
   finally
     Request.Clear;
     strmResponse.Free;
+
+    if bLocked and (IOHandler <> nil) then
+      IOHandler.Unlock;
+    Unlock;
 
     //add to thread for auto retry/reconnect
     TIdWebsocketMultiReadThread.Instance.AddClient(Self);
@@ -1204,7 +1216,7 @@ begin
   end;
 
   //reconnect needed? (in background)
-  if FReconnectlist.Count > 0 then
+  if (FReconnectlist <> nil) and (FReconnectlist.Count > 0) then
   begin
     if FReconnectThread = nil then
       FReconnectThread := TIdWebsocketQueueThread.Create(False{direct start});
@@ -1217,7 +1229,7 @@ begin
         while FReconnectlist.Count > 0 do
         begin
           chn := nil;
-        try
+          try
             //get first one
             l := FReconnectlist.LockList;
             try
@@ -1239,15 +1251,18 @@ begin
             if ( (ws = nil) or
                  (SecondsBetween(Now, ws.LastActivityTime) >= 5) ) then
             begin
-          try
-            if ws <> nil then
-              ws.LastActivityTime := Now;
-            chn.ConnectTimeout  := 1000;
-            if (chn.Host <> '') and (chn.Port > 0) then
-              chn.TryUpgradeToWebsocket;
-          except
-            //just try
-          end;
+              try
+                if not chn.Connected then
+                begin
+                  if ws <> nil then
+                    ws.LastActivityTime := Now;
+                  //chn.ConnectTimeout  := 1000;
+                  if (chn.Host <> '') and (chn.Port > 0) then
+                    chn.TryUpgradeToWebsocket;
+                end;
+              except
+                //just try
+              end;
             end;
 
             //remove from todo list
