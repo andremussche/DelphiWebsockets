@@ -13,12 +13,14 @@ type
   TSocketIOCallbackObj = class;
   TIdBaseSocketIOHandling = class;
   TIdSocketIOHandling = class;
-  ISocketIOContext = interface;
 
-  TSocketIOMsg      = reference to procedure(const ASocket: ISocketIOContext; const aText: string; const aCallback: TSocketIOCallbackObj);
-  TSocketIOMsgJSON  = reference to procedure(const ASocket: ISocketIOContext; const aJSON: ISuperObject; const aCallback: TSocketIOCallbackObj);
+  ISocketIOContext = interface;
+  ISocketIOCallback = interface;
+
+  TSocketIOMsg      = reference to procedure(const ASocket: ISocketIOContext; const aText: string; const aCallback: ISocketIOCallback);
+  TSocketIOMsgJSON  = reference to procedure(const ASocket: ISocketIOContext; const aJSON: ISuperObject; const aCallback: ISocketIOCallback);
   TSocketIONotify   = reference to procedure(const ASocket: ISocketIOContext);
-  TSocketIOEvent    = reference to procedure(const ASocket: ISocketIOContext; const aArgument: TSuperArray; const aCallbackObj: TSocketIOCallbackObj);
+  TSocketIOEvent    = reference to procedure(const ASocket: ISocketIOContext; const aArgument: TSuperArray; const aCallback: ISocketIOCallback);
   TSocketIOError    = reference to procedure(const ASocket: ISocketIOContext; const aErrorClass, aErrorMessage: string);
 
   TSocketIONotifyList = class(TList<TSocketIONotify>);
@@ -105,14 +107,23 @@ type
     procedure SendJSON(const aJSON: ISuperObject; const aCallback: TSocketIOMsgJSON = nil; const aOnError: TSocketIOError = nil);
   end;
 
-  TSocketIOCallbackObj = class
+  ISocketIOCallback = interface
+    ['{BCC31817-7FD8-4CF6-B68B-0F9BAA80DF90}']
+    procedure SendResponse(const aResponse: string);
+    function  IsResponseSend: Boolean;
+  end;
+
+  TSocketIOCallbackObj = class(TInterfacedObject,
+                               ISocketIOCallback)
   protected
     FHandling: TIdBaseSocketIOHandling;
     FSocket: TSocketIOContext;
     FMsgNr: Integer;
-  public
+    {ISocketIOCallback}
     procedure SendResponse(const aResponse: string);
     function  IsResponseSend: Boolean;
+  public
+    constructor Create(aHandling: TIdBaseSocketIOHandling; aSocket: TSocketIOContext; aMsgNr: Integer);
   end;
 
   TIdBaseSocketIOHandling = class(TIdServerBaseHandling)
@@ -280,9 +291,17 @@ begin
   Lock;
   try
     for socket in FConnections.Values do
+    try
       aEachSocketCallback(socket);
+    except
+      //continue: e.g. connnection closed etc
+    end;
     for socket in FConnectionsGUID.Values do
+    try
       aEachSocketCallback(socket);
+    except
+      //continue: e.g. connnection closed etc
+    end;
   finally
     Unlock;
   end;
@@ -443,7 +462,7 @@ var
   args: TSuperArray;
   list: TSocketIOEventList;
   event: TSocketIOEvent;
-  callback: TSocketIOCallbackObj;
+  callback: ISocketIOCallback;
 //  socket: TSocketIOContext;
 begin
   //'5:' [message id ('+')] ':' [message endpoint] ':' [json encoded event]
@@ -462,12 +481,7 @@ begin
 
 //      socket   := FConnections.Items[AContext];
       if aHasCallback then
-      begin
-        callback := TSocketIOCallbackObj.Create;
-        callback.FHandling := Self;
-        callback.FSocket := AContext;
-        callback.FMsgNr  := aMsgNr;
-      end
+        callback := TSocketIOCallbackObj.Create(Self, AContext, aMsgNr)
       else
         callback := nil;
       try
@@ -482,7 +496,7 @@ begin
           end;
         end;
       finally
-        callback.Free;
+        callback := nil;
       end;
     end
     else
@@ -658,7 +672,7 @@ var
 //  socket: TSocketIOContext;
   callback: TSocketIOCallback;
   callbackref: TSocketIOCallbackRef;
-  callbackobj: TSocketIOCallbackObj;
+  callbackobj: ISocketIOCallback;
   errorref: TSocketIOError;
   error: ISuperObject;
   socket: TSocketIOContext;
@@ -726,11 +740,8 @@ begin
     begin
       if bCallback then
       begin
-        callbackobj := TSocketIOCallbackObj.Create;
+        callbackobj := TSocketIOCallbackObj.Create(Self, socket, imsg);
         try
-          callbackobj.FHandling := Self;
-          callbackobj.FSocket := socket;
-          callbackobj.FMsgNr  := imsg;
           try
             OnSocketIOMsg(socket, sdata, callbackobj); //, imsg, bCallback);
           except
@@ -741,7 +752,7 @@ begin
             end;
           end;
         finally
-          callbackobj.Free;
+          callbackobj := nil;
         end
       end
       else
@@ -759,11 +770,8 @@ begin
     begin
       if bCallback then
       begin
-        callbackobj := TSocketIOCallbackObj.Create;
+        callbackobj := TSocketIOCallbackObj.Create(Self, socket, imsg);
         try
-          callbackobj.FHandling := Self;
-          callbackobj.FSocket := socket;
-          callbackobj.FMsgNr  := imsg;
           try
             OnSocketIOJson(socket, SO(sdata), callbackobj); //, imsg, bCallback);
           except
@@ -774,7 +782,7 @@ begin
             end;
           end;
         finally
-          callbackobj.Free;
+          callbackobj := nil;
         end
       end
       else
@@ -828,11 +836,13 @@ begin
     if FSocketIOEventCallback.TryGetValue(imsg, callback) then
     begin
       FSocketIOEventCallback.Remove(imsg);
+      if Assigned(callback) then
       callback(sdata);
     end
     else if FSocketIOEventCallbackRef.TryGetValue(imsg, callbackref) then
     begin
       FSocketIOEventCallbackRef.Remove(imsg);
+      if Assigned(callbackref) then
       callbackref(sdata);
     end
     else ;
@@ -1055,6 +1065,15 @@ begin
 end;
 
 { TSocketIOCallbackObj }
+
+constructor TSocketIOCallbackObj.Create(aHandling: TIdBaseSocketIOHandling;
+  aSocket: TSocketIOContext; aMsgNr: Integer);
+begin
+  FHandling := aHandling;
+  FSocket   := aSocket;
+  FMsgNr    := aMsgNr;
+  inherited Create();
+end;
 
 function TSocketIOCallbackObj.IsResponseSend: Boolean;
 begin
