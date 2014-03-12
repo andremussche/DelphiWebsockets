@@ -600,6 +600,7 @@ begin
     User-Agent: Mozilla/5.0 (Windows NT 6.1; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/27.0.1453.116 Safari/537.36
     Cookie: __utma=1.2040118404.1366961318.1366961318.1366961318.1; __utmc=1; __utmz=1.1366961318.1.1.utmcsr=(direct)|utmccn=(direct)|utmcmd=(none); deviceorder=0123456789101112; MultiTouchEnabled=false; device=3; network_type=0
     }
+    (*
     if SocketIOCompatible then
     begin
       Response.Clear;
@@ -635,6 +636,7 @@ begin
         Response.ResponseText := IOHandler.InputBufferAsString();
     end
     else
+    *)
     begin
       Get(sURL, strmResponse, [101]);
 
@@ -1274,8 +1276,8 @@ begin
               FReconnectlist.UnlockList;
             end;
         finally
-            if chn <> nil then
-          chn.Unlock;
+          if chn <> nil then
+            chn.Unlock;
         end;
       end;
       end);
