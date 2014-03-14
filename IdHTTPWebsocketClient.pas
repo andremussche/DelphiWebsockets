@@ -245,7 +245,10 @@ end;
 
 procedure TIdHTTPWebsocketClient.AsyncDispatchEvent(const aEvent: string);
 begin
-  OutputDebugString(PChar('AsyncDispatchEvent: ' + aEvent) );
+  {$IFDEF DEBUG_WS}
+  if DebugHook <> 0 then
+    OutputDebugString(PChar('AsyncDispatchEvent: ' + aEvent) );
+  {$ENDIF}
 
   //if not Assigned(OnTextData) then Exit;
   //events during dispatch? channel is busy so offload event dispatching to different thread!
