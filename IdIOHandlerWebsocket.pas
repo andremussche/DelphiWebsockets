@@ -1,6 +1,6 @@
 unit IdIOHandlerWebsocket;
 
-{$DEFINE DEBUG_WS}
+{.$DEFINE DEBUG_WS}
 
 //The WebSocket Protocol, RFC 6455
 //http://datatracker.ietf.org/doc/rfc6455/?include_text=1
