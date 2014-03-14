@@ -41,6 +41,7 @@ type
     FLastActivityTime: TDateTime;
     FLastPingTime: TDateTime;
     class var FUseSingleWriteThread: Boolean;
+    procedure SetIsWebsocket(const Value: Boolean);
   protected
     FMessageStream: TMemoryStream;
     FWriteTextToTarget: Boolean;
@@ -63,7 +64,7 @@ type
     function WriteData(aData: TIdBytes; aType: TWSDataCode;
                         aFIN: boolean = true; aRSV1: boolean = false; aRSV2: boolean = false; aRSV3: boolean = false): integer;
     property BusyUpgrading : Boolean read FBusyUpgrading write FBusyUpgrading;
-    property IsWebsocket   : Boolean read FIsWebsocket   write FIsWebsocket;
+    property IsWebsocket   : Boolean read FIsWebsocket   write SetIsWebsocket;
     property IsServerSide  : Boolean read FIsServerSide  write FIsServerSide;
     property ClientExtensionBits : TWSExtensionBits read FExtensionBits write FExtensionBits;
   public
@@ -92,6 +93,8 @@ type
     procedure Write(AValue: TStrings; AWriteLinesCount: Boolean = False; AEncoding: TIdTextEncoding = nil); overload; override;
     procedure Write(AStream: TStream; aType: TWSDataType); overload;
     procedure WriteBufferFlush(AByteCount: Integer); override;
+
+    procedure ReadBytes(var VBuffer: TIdBytes; AByteCount: Integer; AAppend: Boolean = True); override;
 
     property  LastActivityTime: TDateTime read FLastActivityTime write FLastActivityTime;
     property  LastPingTime: TDateTime read FLastPingTime write FLastPingTime;
@@ -136,6 +139,7 @@ type
     class procedure RemoveInstance;
   end;
 
+  TIdBuffer_Ext = class(TIdBuffer);
 
 //close frame codes
 const
@@ -204,14 +208,14 @@ const
   C_FrameCode_Pong         = 10 {A};
   //B-F are reserved for further control frames
 
-function BytesToStringRaw(const AValue: TIdBytes): string;
+function BytesToStringRaw(const AValue: TIdBytes; aSize: Integer = -1): string;
 var
   i: Integer;
 begin
   //SetLength(Result, Length(aValue));
   for i := 0 to High(AValue) do
   begin
-    if AValue[i] = 0 then Exit;
+    if (AValue[i] = 0) and (aSize < 0) then Exit;
 
     if (AValue[i] < 33) or
        ( (AValue[i] > 126) and
@@ -219,7 +223,9 @@ begin
     then
       Result := Result + '#' + IntToStr(AValue[i])
     else
-      Result := Result + Char(AValue[i])
+      Result := Result + Char(AValue[i]);
+
+    if (aSize > 0) and (i > aSize) then Break;
   end;
 end;
 
@@ -603,6 +609,24 @@ begin
   end;
 end;
 
+procedure TIdIOHandlerWebsocket.ReadBytes(var VBuffer: TIdBytes;
+  AByteCount: Integer; AAppend: Boolean);
+begin
+  inherited;
+  {$IFDEF DEBUG_WS}
+  if IsWebsocket then  
+  if Debughook > 0 then
+  begin
+    OutputDebugString(PChar(Format('%d Bytes read(TID:%d): %s',
+                                   [AByteCount, getcurrentthreadid, BytesToStringRaw(VBuffer, AByteCount)])));
+    OutputDebugString(PChar(Format('Buffer (HeadIndex:%d): %s',
+                                   [TIdBuffer_Ext(InputBuffer).FHeadIndex,
+                                    BytesToStringRaw(TIdBuffer_Ext(InputBuffer).FBytes,
+                                    InputBuffer.Size + TIdBuffer_Ext(InputBuffer).FHeadIndex)])));
+  end;
+  {$ENDIF}
+end;
+
 function TIdIOHandlerWebsocket.ReadDataFromSource(
   var VBuffer: TIdBytes): Integer;
 var
@@ -625,7 +649,7 @@ begin
       {$IFDEF DEBUG_WS}
       if Debughook > 0 then
         OutputDebugString(PChar(Format('Received (non ws, TID:%d, P:%d): %s',
-                                       [getcurrentthreadid, Self.Binding.PeerPort, BytesToStringRaw(VBuffer)])));
+                                       [getcurrentthreadid, Self.Binding.PeerPort, BytesToStringRaw(VBuffer, Result)])));
       {$ENDIF}
     end
     else
@@ -775,6 +799,20 @@ begin
   end;
 end;
 
+procedure TIdIOHandlerWebsocket.SetIsWebsocket(const Value: Boolean);
+var data: TIdBytes;
+begin
+  //copy websocket data which was send/received during http upgrade
+  if not FIsWebsocket and Value and
+     (FInputBuffer.Size > 0) then
+  begin
+    FInputBuffer.ExtractToBytes(data);
+    FWSInputBuffer.Write(data);
+  end;
+
+  FIsWebsocket := Value;
+end;
+
 procedure TIdIOHandlerWebsocket.Lock;
 begin
   FLock.Enter;
@@ -818,8 +856,10 @@ var
     begin
       FWSInputBuffer.Write(temp);
       {$IFDEF DEBUG_WS}
-      if debughook > 0 then
-        OutputDebugString(PChar('Received: ' + BytesToStringRaw(temp)));
+//      if debughook > 0 then
+//        OutputDebugString(PChar(Format('Received (TID:%d, P:%d): %s',
+//                                       [getcurrentthreadid, Self.Binding.PeerPort, BytesToStringRaw(temp)])));
+//        OutputDebugString(PChar('Received: ' + BytesToStringRaw(temp)));
       {$ENDIF}
     end;
   end;
@@ -968,6 +1008,11 @@ begin
   end;
 
   Result := Length(aData);
+  {$IFDEF DEBUG_WS}
+  if debughook > 0 then
+    OutputDebugString(PChar(Format('Received (TID:%d, P:%d, Count=%d): %s',
+                                   [getcurrentthreadid, Self.Binding.PeerPort, Result, BytesToStringRaw(aData, Result)])));
+  {$ENDIF}
 end;
 
 function TIdIOHandlerWebsocket.WriteData(aData: TIdBytes;
@@ -1092,7 +1137,8 @@ begin
     until ioffset >= Length(bData);
 
 //    if debughook > 0 then
-//      OutputDebugString(PChar('Written: ' + BytesToStringRaw(bData)));
+//      OutputDebugString(PChar(Format('Written (TID:%d, P:%d): %s',
+//                                     [getcurrentthreadid, Self.Binding.PeerPort, BytesToStringRaw(bData)])));
   finally
     Unlock;
     strmData.Free;

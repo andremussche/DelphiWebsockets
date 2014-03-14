@@ -624,8 +624,8 @@ begin
   if sdata <> '' then
   begin
     {$WARN SYMBOL_PLATFORM OFF}
-    if DebugHook <> 0 then
-      Windows.OutputDebugString(PChar('Send: ' + sdata));
+//    if DebugHook <> 0 then
+//      Windows.OutputDebugString(PChar('Send: ' + sdata));
 
     bytes := TEncoding.UTF8.GetBytes(sdata);
     aStrmResponse.Write(bytes[0], Length(bytes));
@@ -694,8 +694,8 @@ begin
 
   str := aData;
   if str = '' then Exit;
-  if DebugHook <> 0 then
-    Windows.OutputDebugString(PChar('Received: ' + str));
+//  if DebugHook <> 0 then
+//    Windows.OutputDebugString(PChar('Received: ' + str));
   while str[1] = #0 do
     Delete(str, 1, 1);
 
@@ -1048,8 +1048,8 @@ begin
     if (ASocket.FIOHandler <> nil) then
     begin
       //Assert(ASocket.FIOHandler.IsWebsocket);
-      if DebugHook <> 0 then
-        Windows.OutputDebugString(PChar('Send: ' + aText));
+//      if DebugHook <> 0 then
+//        Windows.OutputDebugString(PChar('Send: ' + aText));
       ASocket.FIOHandler.Write(aText);
     end
     else if ASocket.GUID <> '' then
