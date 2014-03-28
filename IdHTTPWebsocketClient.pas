@@ -527,6 +527,7 @@ begin
       sURL := Format('http://%s:%d/socket.io/1/', [Host, Port]);
       strmResponse.Clear;
 
+      ReadTimeout := 5 * 1000;
       //get initial handshake
       Post(sURL, strmResponse, strmResponse);
       if ResponseCode = 200 {OK} then
