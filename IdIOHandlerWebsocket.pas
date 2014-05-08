@@ -363,7 +363,7 @@ end;
 function TIdIOHandlerWebsocket.HasData: Boolean;
 begin
   //buffered data available? (more data from previous read)
-  Result := (FWSInputBuffer.Size > 0);
+  Result := (FWSInputBuffer.Size > 0) or not InputBufferIsEmpty;
 end;
 
 function TIdIOHandlerWebsocket.InternalReadDataFromSource(
@@ -672,7 +672,6 @@ begin
         else
           FInputBuffer.Write(LongWord(Result))
       except
-        Unlock;  //always unlock when socket exception
         FClosedGracefully := True; //closed (but not gracefully?)
         Raise;
       end;
@@ -849,7 +848,8 @@ var
   var
     temp: TIdBytes;
   begin
-    if HasData then Exit(True);
+    //if HasData then Exit(True);
+    if (FWSInputBuffer.Size > 0) then Exit(True);
 
     Result := InternalReadDataFromSource(temp, ARaiseExceptionOnTimeout) > 0;
     if Result then

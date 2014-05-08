@@ -180,6 +180,8 @@ type
     procedure UnLock;
     function  ConnectionCount: Integer;
 
+    function  GetSocketIOContext(const AContext: TIdContext): ISocketIOContext;
+
 //    procedure  EmitEventToAll(const aEventName: string; const aData: ISuperObject; const aCallback: TSocketIOMsgJSON = nil);
     function  NewConnection(const AContext: TIdContext): TSocketIOContext;overload;
     function  NewConnection(const aGUID, aPeerIP: string): TSocketIOContext;overload;
@@ -340,6 +342,20 @@ begin
     end;
   finally
     Unlock;
+  end;
+end;
+
+function TIdBaseSocketIOHandling.GetSocketIOContext(const AContext: TIdContext): ISocketIOContext;
+var
+  socket: TSocketIOContext;
+begin
+  Result := nil;
+  Lock;
+  try
+    if FConnections.TryGetValue(AContext, socket) then
+      Exit(socket);
+  finally
+    UnLock;
   end;
 end;
 
@@ -837,13 +853,13 @@ begin
     begin
       FSocketIOEventCallback.Remove(imsg);
       if Assigned(callback) then
-      callback(sdata);
+        callback(sdata);
     end
     else if FSocketIOEventCallbackRef.TryGetValue(imsg, callbackref) then
     begin
       FSocketIOEventCallbackRef.Remove(imsg);
       if Assigned(callbackref) then
-      callbackref(sdata);
+        callbackref(sdata);
     end
     else ;
       //raise EIdSocketIoUnhandledMessage.Create(str);
@@ -1112,13 +1128,16 @@ begin
   FreeAndNil(FQueue);
   UnLock;
   FLock.Free;
-  FCustomData.Free;
+  if OwnsCustomData then
+    FCustomData.Free;
   inherited;
 end;
 
 procedure TSocketIOContext.EmitEvent(const aEventName, aData: string;
   const aCallback: TSocketIOMsgJSON; const aOnError: TSocketIOError);
 begin
+  Assert(FHandling <> nil);
+
   if not Assigned(aCallback) then
     FHandling.WriteSocketIOEvent(Self, '', aEventName, '[' + aData + ']', nil, nil)
   else
@@ -1134,7 +1153,10 @@ end;
 procedure TSocketIOContext.EmitEvent(const aEventName: string; const aData: ISuperObject;
   const aCallback: TSocketIOMsgJSON; const aOnError: TSocketIOError);
 begin
-  EmitEvent(aEventName, aData.AsJSon, aCallback, aOnError);
+  if aData <> nil then
+    EmitEvent(aEventName, aData.AsJSon, aCallback, aOnError)
+  else
+    EmitEvent(aEventName, '', aCallback, aOnError);
 end;
 
 function TSocketIOContext.GetCustomData: TObject;

@@ -236,103 +236,108 @@ var
   wscode: TWSDataCode;
   swstext: utf8string;
 begin
-  //http server supports websockets?
-  if not FTriedUpgrade then
-  begin
-    if not IndyClient.IOHandler.IsWebsocket then   //not already upgraded?
-      TryUpgradeToWebsocket;
-    FTriedUpgrade := True; //one shot
-  end;
-
-  ws := IndyClient.IOHandler as TIdIOHandlerWebsocket;
-  if not ws.IsWebsocket then
-    //normal http dispatch
-    inherited IntDispatch(aRequest, aResponse)
-  else
-  //websocket dispatch
-  begin
-    ws.Lock;
-    try
-      //write messagenr at end
-      aRequest.Position := aRequest.Size;
-      Inc(FMessageNr);
-      iMsgNr := FMessageNr;
-      aRequest.Write(C_RO_WS_NR, Length(C_RO_WS_NR));
-      aRequest.Write(iMsgNr, SizeOf(iMsgNr));
-      aRequest.Position := 0;
-
-      CheckConnection;
-
-      //write
-      IndyClient.IOHandler.Write(aRequest);
-
-      iMsgNr2 := 0;
-      while iMsgNr2 <= 0 do
-      begin
-        aResponse.Size := 0;  //clear
-        //first is the data type TWSDataType(text or bin), but is ignore/not needed
-        wscode := TWSDataCode(IndyClient.IOHandler.ReadLongWord);
-        //next the size + data = stream
-        IndyClient.IOHandler.ReadStream(aResponse);
-        //ignore ping/pong messages
-        if wscode in [wdcPing, wdcPong] then Continue;
-        if aResponse.Size >= Length(C_RO_WS_NR) + SizeOf(iMsgNr) then
-        begin
-          //get event or message nr
-          aResponse.Position   := aResponse.Size - Length(C_RO_WS_NR) - SizeOf(iMsgNr2);
-          aResponse.Read(cWSNR[0], Length(cWSNR));
-        end;
-
-        if (cWSNR = C_RO_WS_NR) then
-        begin
-          aResponse.Read(iMsgNr2, SizeOf(iMsgNr2));
-          aResponse.Size       := aResponse.Size - Length(C_RO_WS_NR) - SizeOf(iMsgNr2); //trunc
-          aResponse.Position   := 0;
-
-          //event?
-          if iMsgNr2 < 0 then
-          begin
-            //events during dispatch? channel is busy so offload event dispatching to different thread!
-            AsyncDispatchEvent(aResponse);
-            aResponse.Size := 0;
-            {
-            ws.Unlock;
-            try
-              IntDispatchEvent(aResponse);
-              aResponse.Size := 0;
-            finally
-              ws.Lock;
-            end;
-            }
-          end;
-        end
-        else
-        begin
-          aResponse.Position := 0;
-          if wscode = wdcBinary then
-          begin
-            Self.IndyClient.AsyncDispatchEvent(aResponse);
-          end
-          else if wscode = wdcText then
-          begin
-            SetLength(swstext, aResponse.Size);
-            aResponse.Read(swstext[1], aResponse.Size);
-            if swstext <> '' then
-            begin
-              Self.IndyClient.AsyncDispatchEvent(string(swstext));
-            end;
-          end;
-        end;
-      end;
-    except
-      ws.Unlock; //always unlock
-      ResetChannel;
-      Raise;
+  IndyClient.Lock;
+  try
+    //http server supports websockets?
+    if not FTriedUpgrade then
+    begin
+      if not IndyClient.IOHandler.IsWebsocket then   //not already upgraded?
+        TryUpgradeToWebsocket;
+      FTriedUpgrade := True; //one shot
     end;
-    ws.Unlock;  //normal unlock (no extra try finally needed)
 
-    if iMsgNr2 <> iMsgNr then
-      Assert(iMsgNr2 = iMsgNr, 'Message number mismatch between send and received!');
+    ws := IndyClient.IOHandler as TIdIOHandlerWebsocket;
+    if not ws.IsWebsocket then
+      //normal http dispatch
+      inherited IntDispatch(aRequest, aResponse)
+    else
+    //websocket dispatch
+    begin
+      ws.Lock;
+      try
+        //write messagenr at end
+        aRequest.Position := aRequest.Size;
+        Inc(FMessageNr);
+        iMsgNr := FMessageNr;
+        aRequest.Write(C_RO_WS_NR, Length(C_RO_WS_NR));
+        aRequest.Write(iMsgNr, SizeOf(iMsgNr));
+        aRequest.Position := 0;
+
+        CheckConnection;
+
+        //write
+        IndyClient.IOHandler.Write(aRequest);
+
+        iMsgNr2 := 0;
+        while iMsgNr2 <= 0 do
+        begin
+          aResponse.Size := 0;  //clear
+          //first is the data type TWSDataType(text or bin), but is ignore/not needed
+          wscode := TWSDataCode(IndyClient.IOHandler.ReadLongWord);
+          //next the size + data = stream
+          IndyClient.IOHandler.ReadStream(aResponse);
+          //ignore ping/pong messages
+          if wscode in [wdcPing, wdcPong] then Continue;
+          if aResponse.Size >= Length(C_RO_WS_NR) + SizeOf(iMsgNr) then
+          begin
+            //get event or message nr
+            aResponse.Position   := aResponse.Size - Length(C_RO_WS_NR) - SizeOf(iMsgNr2);
+            aResponse.Read(cWSNR[0], Length(cWSNR));
+          end;
+
+          if (cWSNR = C_RO_WS_NR) then
+          begin
+            aResponse.Read(iMsgNr2, SizeOf(iMsgNr2));
+            aResponse.Size       := aResponse.Size - Length(C_RO_WS_NR) - SizeOf(iMsgNr2); //trunc
+            aResponse.Position   := 0;
+
+            //event?
+            if iMsgNr2 < 0 then
+            begin
+              //events during dispatch? channel is busy so offload event dispatching to different thread!
+              AsyncDispatchEvent(aResponse);
+              aResponse.Size := 0;
+              {
+              ws.Unlock;
+              try
+                IntDispatchEvent(aResponse);
+                aResponse.Size := 0;
+              finally
+                ws.Lock;
+              end;
+              }
+            end;
+          end
+          else
+          begin
+            aResponse.Position := 0;
+            if wscode = wdcBinary then
+            begin
+              Self.IndyClient.AsyncDispatchEvent(aResponse);
+            end
+            else if wscode = wdcText then
+            begin
+              SetLength(swstext, aResponse.Size);
+              aResponse.Read(swstext[1], aResponse.Size);
+              if swstext <> '' then
+              begin
+                Self.IndyClient.AsyncDispatchEvent(string(swstext));
+              end;
+            end;
+          end;
+        end;
+      except
+        ws.Unlock; //always unlock
+        ResetChannel;
+        Raise;
+      end;
+      ws.Unlock;  //normal unlock (no extra try finally needed)
+
+      if iMsgNr2 <> iMsgNr then
+        Assert(iMsgNr2 = iMsgNr, 'Message number mismatch between send and received!');
+    end;
+  finally
+    IndyClient.UnLock;
   end;
 end;
 

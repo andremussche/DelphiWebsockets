@@ -10,7 +10,7 @@ uses
   IdHashSHA,                     //XE3 etc
   {$IFEND}
   IdServerSocketIOHandling, IdServerWebsocketContext,
-  Classes, IdServerBaseHandling, IdIOHandlerWebsocket;
+  Classes, IdServerBaseHandling, IdIOHandlerWebsocket, IdSocketIOHandling;
 
 type
   TIdServerSocketIOHandling_Ext = class(TIdServerSocketIOHandling)
@@ -25,15 +25,29 @@ type
   public
     class function ProcessServerCommandGet(AThread: TIdServerWSContext;
       ARequestInfo: TIdHTTPRequestInfo; AResponseInfo: TIdHTTPResponseInfo): Boolean;
+
+    class function CurrentSocket: ISocketIOContext;
   end;
 
 implementation
 
 uses
   StrUtils, SysUtils, DateUtils,
-  IdCustomTCPServer, IdCoderMIME;
+  IdCustomTCPServer, IdCoderMIME, IdThread;
 
 { TIdServerWebsocketHandling }
+
+class function TIdServerWebsocketHandling.CurrentSocket: ISocketIOContext;
+var
+  thread: TIdThreadWithTask;
+  context: TIdServerWSContext;
+begin
+  if not (TThread.Currentthread is TIdThreadWithTask) then Exit(nil);
+  thread  := TThread.Currentthread as TIdThreadWithTask;
+  if not (thread.Task is TIdServerWSContext) then Exit(nil);
+  context := thread.Task as TIdServerWSContext;
+  Result  := context.SocketIO.GetSocketIOContext(context);
+end;
 
 class procedure TIdServerWebsocketHandling.DoWSExecute(AThread: TIdContext; aSocketIOHandler: TIdServerSocketIOHandling_Ext);
 var
