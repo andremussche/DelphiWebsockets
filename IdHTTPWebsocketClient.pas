@@ -184,6 +184,9 @@ uses
   IdCoderMIME, SysUtils, Math, IdException, IdStackConsts, IdStack,
   IdStackBSDBase, IdGlobal, Windows, StrUtils, DateUtils;
 
+var
+  GUnitFinalized: Boolean = false;
+
 //type
 //  TAnonymousThread = class(TThread)
 //  protected
@@ -1148,6 +1151,8 @@ procedure TIdWebsocketMultiReadThread.AddClient(
 var l: TList;
 begin
   //Assert( (aChannel.IOHandler as TIdIOHandlerWebsocket).IsWebsocket, 'Channel is not a websocket');
+  if Self = nil then Exit;
+  if Self.Terminated then Exit;
 
   l := FChannels.LockList;
   try
@@ -1212,6 +1217,13 @@ end;
 
 destructor TIdWebsocketMultiReadThread.Destroy;
 begin
+  if FReconnectThread <> nil then
+  begin
+    FReconnectThread.Terminate;
+    FReconnectThread.WaitFor;
+    FReconnectThread.Free;
+  end;
+
   IdWinsock2.closesocket(FTempHandle);
   FTempHandle := 0;
   FChannels.Free;
@@ -1256,6 +1268,8 @@ class function TIdWebsocketMultiReadThread.Instance: TIdWebsocketMultiReadThread
 begin
   if (FInstance = nil) then
   begin
+    if GUnitFinalized then Exit(nil);
+
     FInstance := TIdWebsocketMultiReadThread.Create(True);
     FInstance.Start;
   end;
@@ -1269,6 +1283,8 @@ var
   ws: TIdIOHandlerWebsocket;
   i: Integer;
 begin
+  if Terminated then Exit;
+
   l := FChannels.LockList;
   try
     for i := 0 to l.Count - 1 do
@@ -1311,8 +1327,11 @@ begin
     FChannels.UnlockList;
   end;
 
+  if Terminated then Exit;
+
   //reconnect needed? (in background)
-  if (FReconnectlist <> nil) and (FReconnectlist.Count > 0) then
+  if FReconnectlist <> nil then
+  if FReconnectlist.Count > 0 then
   begin
     if FReconnectThread = nil then
       FReconnectThread := TIdWebsocketQueueThread.Create(False{direct start});
@@ -1456,7 +1475,8 @@ begin
   //some data?
   if (iResult > 0) then
   begin
-    //strmEvent := nil;
+    //make sure the thread is created outside a lock
+    TIdWebsocketDispatchThread.Instance;
 
     l := FChannels.LockList;
     if l = nil then Exit;
@@ -1503,6 +1523,7 @@ procedure TIdWebsocketMultiReadThread.RemoveClient(
   aChannel: TIdHTTPWebsocketClient);
 begin
   if Self = nil then Exit;
+  if Self.Terminated then Exit;
 
   aChannel.Lock;
   try
@@ -1516,18 +1537,23 @@ begin
 end;
 
 class procedure TIdWebsocketMultiReadThread.RemoveInstance(aForced: boolean);
+var
+  o: TIdWebsocketMultiReadThread;
 begin
   if FInstance <> nil then
   begin
     FInstance.Terminate;
+    o := FInstance;
+    FInstance := nil;
+
     if aForced then
     begin
-      WaitForSingleObject(FInstance.Handle, 2 * 1000);
-      TerminateThread(FInstance.Handle, MaxInt);
+      WaitForSingleObject(o.Handle, 2 * 1000);
+      TerminateThread(o.Handle, MaxInt);
     end
     else
-      FInstance.WaitFor;
-    FreeAndNil(FInstance);
+      o.WaitFor;
+    FreeAndNil(o);
   end;
 end;
 
@@ -1544,6 +1570,8 @@ end;
 procedure TIdWebsocketMultiReadThread.Terminate;
 begin
   inherited Terminate;
+  if FReconnectThread <> nil then
+    FReconnectThread.Terminate;
 
   FChannels.LockList;
   try
@@ -1560,6 +1588,8 @@ class function TIdWebsocketDispatchThread.Instance: TIdWebsocketDispatchThread;
 begin
   if FInstance = nil then
   begin
+    if GUnitFinalized then Exit(nil);
+
     GlobalNameSpace.BeginWrite;
     try
       if FInstance = nil then
@@ -1575,17 +1605,22 @@ begin
 end;
 
 class procedure TIdWebsocketDispatchThread.RemoveInstance;
+var
+  o: TIdWebsocketDispatchThread;
 begin
   if FInstance <> nil then
   begin
     FInstance.Terminate;
+    o := FInstance;
+    FInstance := nil;
+
     if aForced then
     begin
-      WaitForSingleObject(FInstance.Handle, 2 * 1000);
-      TerminateThread(FInstance.Handle, MaxInt);
+      WaitForSingleObject(o.Handle, 2 * 1000);
+      TerminateThread(o.Handle, MaxInt);
     end;
-    FInstance.WaitFor;
-    FreeAndNil(FInstance);
+    o.WaitFor;
+    FreeAndNil(o);
   end;
 end;
 
@@ -1604,7 +1639,9 @@ end;
 
 initialization
 finalization
+  GUnitFinalized := True;
+  if TIdWebsocketMultiReadThread.Instance <> nil then
+    TIdWebsocketMultiReadThread.Instance.Terminate;
+  TIdWebsocketDispatchThread.RemoveInstance();
   TIdWebsocketMultiReadThread.RemoveInstance();
-  TIdWebsocketDispatchThread.RemoveInstance()
-
 end.

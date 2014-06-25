@@ -116,18 +116,21 @@ procedure TROIndyHTTPWebsocketChannel.SetHost(const Value: string);
 begin
   IndyClient.Host := Value;
   TargetURL := Format('ws://%s:%d/%s', [Host, Port, WSResourceName]);
+  FTriedUpgrade := False; //reset
 end;
 
 procedure TROIndyHTTPWebsocketChannel.SetPort(const Value: integer);
 begin
   IndyClient.Port := Value;
   TargetURL := Format('ws://%s:%d/%s', [Host, Port, WSResourceName]);
+  FTriedUpgrade := False; //reset
 end;
 
 procedure TROIndyHTTPWebsocketChannel.SetWSResourceName(const Value: string);
 begin
   IndyClient.WSResourceName := Value;
   TargetURL := Format('ws://%s:%d/%s', [Host, Port, WSResourceName]);
+  FTriedUpgrade := False; //reset
 end;
 
 function TROIndyHTTPWebsocketChannel.GetHost: string;

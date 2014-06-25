@@ -6,7 +6,7 @@ uses
   Classes, Generics.Collections,
   superobject,
   IdServerBaseHandling, IdContext, IdException, IdIOHandlerWebsocket, IdHTTP,
-  SyncObjs;
+  SyncObjs, SysUtils;
 
 type
   TSocketIOContext = class;
@@ -22,6 +22,7 @@ type
   TSocketIONotify   = reference to procedure(const ASocket: ISocketIOContext);
   TSocketIOEvent    = reference to procedure(const ASocket: ISocketIOContext; const aArgument: TSuperArray; const aCallback: ISocketIOCallback);
   TSocketIOError    = reference to procedure(const ASocket: ISocketIOContext; const aErrorClass, aErrorMessage: string);
+  TSocketIOEventError = reference to procedure(const ASocket: ISocketIOContext; const aCallback: ISocketIOCallback; E: Exception);
 
   TSocketIONotifyList = class(TList<TSocketIONotify>);
   TSocketIOEventList  = class(TList<TSocketIOEvent>);
@@ -139,6 +140,8 @@ type
     FOnSocketIOJson: TSocketIOMsgJSON;
 
     procedure ProcessEvent(const AContext: TSocketIOContext; const aText: string; aMsgNr: Integer; aHasCallback: Boolean);
+  private
+    FOnEventError: TSocketIOEventError;
   protected
     type
       TSocketIOCallback    = procedure(const aData: string) of object;
@@ -194,6 +197,7 @@ type
     procedure OnEvent     (const aEventName: string; const aCallback: TSocketIOEvent);
     procedure OnConnection(const aCallback: TSocketIONotify);
     procedure OnDisconnect(const aCallback: TSocketIONotify);
+    property  OnEventError: TSocketIOEventError read FOnEventError write FOnEventError;
 
     procedure EnumerateSockets(const aEachSocketCallback: TSocketIONotify);
   end;
@@ -208,7 +212,7 @@ type
 implementation
 
 uses
-  SysUtils, StrUtils, IdServerWebsocketContext, IdHTTPWebsocketClient, Windows;
+  StrUtils, IdServerWebsocketContext, IdHTTPWebsocketClient, Windows;
 
 procedure TIdBaseSocketIOHandling.AfterConstruction;
 begin
@@ -501,15 +505,15 @@ begin
       else
         callback := nil;
       try
+        for event in list do
         try
-          for event in list do
-            event(AContext, args, callback);
-        except
-          on E:Exception do
-          begin
+          event(AContext, args, callback);
+        except on E:Exception do
+          if Assigned(OnEventError) then
+            OnEventError(AContext, callback, e)
+          else
             if callback <> nil then
-              callback.SendResponse( SO(['Error', e.Message]).AsJSon );
-          end;
+              callback.SendResponse( SO(['Error', SO(['msg', e.message])]).AsJSon );
         end;
       finally
         callback := nil;
