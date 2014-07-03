@@ -11,14 +11,14 @@ uses
 type
   TIdServerSocketIOHandling = class(TIdBaseSocketIOHandling)
   protected
-    procedure ProcessHeatbeatRequest(const AContext: TSocketIOContext; const aText: string); override;
+    procedure ProcessHeatbeatRequest(const AContext: ISocketIOContext; const aText: string); override;
   public
     function  SendToAll(const aMessage: string; const aCallback: TSocketIOMsgJSON = nil; const aOnError: TSocketIOError = nil): Integer;
     procedure SendTo   (const aContext: TIdServerContext; const aMessage: string; const aCallback: TSocketIOMsgJSON = nil; const aOnError: TSocketIOError = nil);
 
     function  EmitEventToAll(const aEventName: string; const aData: ISuperObject; const aCallback: TSocketIOMsgJSON = nil; const aOnError: TSocketIOError = nil): Integer;overload;
     function  EmitEventToAll(const aEventName: string; const aData: string      ; const aCallback: TSocketIOMsgJSON = nil; const aOnError: TSocketIOError = nil): Integer;overload;
-    procedure EmitEventTo   (const aContext: TSocketIOContext;
+    procedure EmitEventTo   (const aContext: ISocketIOContext;
                              const aEventName: string; const aData: ISuperObject; const aCallback: TSocketIOMsgJSON = nil; const aOnError: TSocketIOError = nil);overload;
     procedure EmitEventTo   (const aContext: TIdServerContext;
                              const aEventName: string; const aData: ISuperObject; const aCallback: TSocketIOMsgJSON = nil; const aOnError: TSocketIOError = nil);overload;
@@ -32,7 +32,7 @@ uses
 { TIdServerSocketIOHandling }
 
 procedure TIdServerSocketIOHandling.EmitEventTo(
-  const aContext: TSocketIOContext; const aEventName: string;
+  const aContext: ISocketIOContext; const aEventName: string;
   const aData: ISuperObject; const aCallback: TSocketIOMsgJSON; const aOnError: TSocketIOError);
 var
   jsonarray: string;
@@ -61,7 +61,7 @@ procedure TIdServerSocketIOHandling.EmitEventTo(
   const aContext: TIdServerContext; const aEventName: string;
   const aData: ISuperObject; const aCallback: TSocketIOMsgJSON; const aOnError: TSocketIOError);
 var
-  context: TSocketIOContext;
+  context: ISocketIOContext;
 begin
   Lock;
   try
@@ -76,7 +76,7 @@ function TIdServerSocketIOHandling.EmitEventToAll(const aEventName,
   aData: string; const aCallback: TSocketIOMsgJSON;
   const aOnError: TSocketIOError): Integer;
 var
-  context: TSocketIOContext;
+  context: ISocketIOContext;
   jsonarray: string;
 begin
   Result := 0;
@@ -127,7 +127,7 @@ begin
 end;
 
 procedure TIdServerSocketIOHandling.ProcessHeatbeatRequest(
-  const AContext: TSocketIOContext; const aText: string);
+  const AContext: ISocketIOContext; const aText: string);
 begin
   inherited ProcessHeatbeatRequest(AContext, aText);
 end;
@@ -135,7 +135,7 @@ end;
 procedure TIdServerSocketIOHandling.SendTo(const aContext: TIdServerContext;
   const aMessage: string; const aCallback: TSocketIOMsgJSON; const aOnError: TSocketIOError);
 var
-  context: TSocketIOContext;
+  context: ISocketIOContext;
 begin
   Lock;
   try
@@ -159,7 +159,7 @@ end;
 function TIdServerSocketIOHandling.SendToAll(const aMessage: string;
   const aCallback: TSocketIOMsgJSON; const aOnError: TSocketIOError): Integer;
 var
-  context: TSocketIOContext;
+  context: ISocketIOContext;
 begin
   Result := 0;
   Lock;

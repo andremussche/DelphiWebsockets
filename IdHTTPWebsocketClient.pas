@@ -504,7 +504,9 @@ var
 begin
   Lock;
   try
-    if not IOHandler.IsWebsocket then
+    if IOHandler = nil then
+      Connect
+    else if not IOHandler.IsWebsocket then
       InternalUpgradeToWebsocket(True{raise}, sError);
   finally
     UnLock;
