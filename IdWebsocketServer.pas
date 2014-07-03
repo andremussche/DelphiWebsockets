@@ -15,7 +15,9 @@ type
     FSocketIO: TIdServerSocketIOHandling_Ext;
     FOnMessageText: TWebsocketMessageText;
     FOnMessageBin: TWebsocketMessageBin;
+    FWriteTimeout: Integer;
     function GetSocketIO: TIdServerSocketIOHandling;
+    procedure SetWriteTimeout(const Value: Integer);
   protected
     procedure DoCommandGet(AContext: TIdContext; ARequestInfo: TIdHTTPRequestInfo;
      AResponseInfo: TIdHTTPResponseInfo); override;
@@ -34,12 +36,14 @@ type
     property OnMessageBin : TWebsocketMessageBin  read FOnMessageBin  write FOnMessageBin;
 
     property SocketIO: TIdServerSocketIOHandling read GetSocketIO;
+  published
+    property WriteTimeout: Integer read FWriteTimeout write SetWriteTimeout default 2000;
   end;
 
 implementation
 
 uses
-  IdServerIOHandlerWebsocket, IdStreamVCL, IdGlobal, Windows;
+  IdServerIOHandlerWebsocket, IdStreamVCL, IdGlobal, Windows, IdWinsock2;
 
 { TIdWebsocketServer }
 
@@ -52,12 +56,18 @@ begin
   ContextClass := TIdServerWSContext;
   if IOHandler = nil then
     IOHandler := TIdServerIOHandlerWebsocket.Create(Self);
+
+  FWriteTimeout := 2 * 1000;  //2s
 end;
 
 procedure TIdWebsocketServer.ContextCreated(AContext: TIdContext);
 begin
   inherited ContextCreated(AContext);
   (AContext as TIdServerWSContext).OnCustomChannelExecute := Self.WebsocketChannelRequest;
+
+  //default 2s write timeout
+  //http://msdn.microsoft.com/en-us/library/windows/desktop/ms740532(v=vs.85).aspx
+  AContext.Connection.Socket.Binding.SetSockOpt(SOL_SOCKET, SO_SNDTIMEO, Self.WriteTimeout);
 end;
 
 procedure TIdWebsocketServer.ContextDisconnected(AContext: TIdContext);
@@ -107,6 +117,11 @@ begin
   finally
     Self.Contexts.UnlockList;
   end;
+end;
+
+procedure TIdWebsocketServer.SetWriteTimeout(const Value: Integer);
+begin
+  FWriteTimeout := Value;
 end;
 
 procedure TIdWebsocketServer.WebsocketChannelRequest(

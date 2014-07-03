@@ -601,6 +601,8 @@ procedure TIdBaseSocketIOHandling.ProcessSocketIORequest(
   begin
     Result := '';
     ilength := strmRequest.Size - strmRequest.Position;
+    if ilength <= 0 then
+      Exit;
     SetLength(utf8, ilength);
     strmRequest.Read(utf8[0], ilength);
     Result := TEncoding.UTF8.GetString(utf8);
@@ -1365,6 +1367,11 @@ begin
     FEvent := TEvent.Create;
 
   FQueue.Add(aData);
+
+  //max 1000 items in queue (otherwise infinite mem leak possible?)
+  while FQueue.Count > 1000 do
+    FQueue.Delete(0);
+
   FEvent.SetEvent;
 end;
 

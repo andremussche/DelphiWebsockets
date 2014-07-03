@@ -88,28 +88,36 @@ begin
     begin
       if context.IsDisconnected then Continue;
 
-      if not Assigned(aCallback) then
-        WriteSocketIOEvent(context, ''{no room}, aEventName, jsonarray, nil, nil)
-      else
-        WriteSocketIOEventRef(context, ''{no room}, aEventName, jsonarray,
-          procedure(const aData: string)
-          begin
-            aCallback(context, SO(aData), nil);
-          end, aOnError);
+      try
+        if not Assigned(aCallback) then
+          WriteSocketIOEvent(context, ''{no room}, aEventName, jsonarray, nil, nil)
+        else
+          WriteSocketIOEventRef(context, ''{no room}, aEventName, jsonarray,
+            procedure(const aData: string)
+            begin
+              aCallback(context, SO(aData), nil);
+            end, aOnError);
+      except
+        //try to send to others
+      end;
       Inc(Result);
     end;
     for context in FConnectionsGUID.Values do
     begin
       if context.IsDisconnected then Continue;
 
-      if not Assigned(aCallback) then
-        WriteSocketIOEvent(context, ''{no room}, aEventName, jsonarray, nil, nil)
-      else
-        WriteSocketIOEventRef(context, ''{no room}, aEventName, jsonarray,
-          procedure(const aData: string)
-          begin
-            aCallback(context, SO(aData), nil);
-          end, aOnError);
+      try
+        if not Assigned(aCallback) then
+          WriteSocketIOEvent(context, ''{no room}, aEventName, jsonarray, nil, nil)
+        else
+          WriteSocketIOEventRef(context, ''{no room}, aEventName, jsonarray,
+            procedure(const aData: string)
+            begin
+              aCallback(context, SO(aData), nil);
+            end, aOnError);
+      except
+        //try to send to others
+      end;
       Inc(Result);
     end;
   finally

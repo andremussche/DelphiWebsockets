@@ -38,10 +38,12 @@ type
     FOnData: TWebsocketMsgBin;
     FOnTextData: TWebsocketMsgText;
     FNoAsyncRead: Boolean;
+    FWriteTimeout: Integer;
     function  GetIOHandlerWS: TIdIOHandlerWebsocket;
     procedure SetIOHandlerWS(const Value: TIdIOHandlerWebsocket);
     procedure SetOnData(const Value: TWebsocketMsgBin);
     procedure SetOnTextData(const Value: TWebsocketMsgText);
+    procedure SetWriteTimeout(const Value: Integer);
   protected
     FSocketIOCompatible: Boolean;
     FSocketIOHandshakeResponse: string;
@@ -94,6 +96,8 @@ type
     property  Host;
     property  Port;
     property  WSResourceName: string read FWSResourceName write FWSResourceName;
+
+    property  WriteTimeout: Integer read FWriteTimeout write SetWriteTimeout default 2000;
   end;
 
 //  on error
@@ -231,6 +235,8 @@ begin
 //  FHeartBeat := TTimer.Create(nil);
 //  FHeartBeat.Enabled := False;
 //  FHeartBeat.OnTimer := HeartBeatTimer;
+
+  FWriteTimeout := 2 * 1000;
 end;
 
 procedure TIdHTTPWebsocketClient.AsyncDispatchEvent(const aEvent: TStream);
@@ -752,6 +758,11 @@ begin
     if not Self.NoAsyncRead then
       TIdWebsocketMultiReadThread.Instance.AddClient(Self);
   end;
+
+  //default 2s write timeout
+  //http://msdn.microsoft.com/en-us/library/windows/desktop/ms740532(v=vs.85).aspx
+  if Connected then
+    Self.IOHandler.Binding.SetSockOpt(SOL_SOCKET, SO_SNDTIMEO, Self.WriteTimeout);
 end;
 
 procedure TIdHTTPWebsocketClient.Lock;
@@ -897,6 +908,13 @@ begin
 //     (Self.IOHandler as TIdIOHandlerWebsocket).IsWebsocket
 //  then
 //    TIdWebsocketMultiReadThread.Instance.AddClient(Self);
+end;
+
+procedure TIdHTTPWebsocketClient.SetWriteTimeout(const Value: Integer);
+begin
+  FWriteTimeout := Value;
+  if Connected then
+    Self.IOHandler.Binding.SetSockOpt(SOL_SOCKET, SO_SNDTIMEO, Self.WriteTimeout);
 end;
 
 { TIdHTTPSocketIOClient }
