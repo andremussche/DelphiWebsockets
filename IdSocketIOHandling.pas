@@ -186,7 +186,7 @@ type
     procedure WriteSocketIOJSON(const ASocket: ISocketIOContext; const aRoom, aJSON: string; aCallback: TSocketIOCallbackRef = nil; const aOnError: TSocketIOError = nil);
     procedure WriteSocketIOEvent(const ASocket: ISocketIOContext; const aRoom, aEventName, aJSONArray: string; aCallback: TSocketIOCallback; const aOnError: TSocketIOError);
     procedure WriteSocketIOEventRef(const ASocket: ISocketIOContext; const aRoom, aEventName, aJSONArray: string; aCallback: TSocketIOCallbackRef; const aOnError: TSocketIOError);
-    function  WriteSocketIOEventSync(const ASocket: ISocketIOContext; const aRoom, aEventName, aJSONArray: string; aMaxwait_ms: Integer = INFINITE): ISuperObject;
+    function  WriteSocketIOEventSync(const ASocket: ISocketIOContext; const aRoom, aEventName, aJSONArray: string; aMaxwait_ms: Cardinal = INFINITE): ISuperObject;
     procedure WriteSocketIOResult(const ASocket: ISocketIOContext; aRequestMsgNr: Integer; const aRoom, aData: string);
 
     procedure ProcessSocketIO_XHR(const aGUID: string; const aStrmRequest, aStrmResponse: TStream);
@@ -229,7 +229,7 @@ type
   public
     procedure Send(const aMessage: string; const aCallback: TSocketIOMsgJSON = nil; const aOnError: TSocketIOError = nil);
     procedure Emit(const aEventName: string; const aData: ISuperObject; const aCallback: TSocketIOMsgJSON = nil; const aOnError: TSocketIOError = nil);overload;
-    function  EmitSync(const aEventName: string; const aData: ISuperObject; aMaxwait_ms: Integer = INFINITE): ISuperobject;
+    function  EmitSync(const aEventName: string; const aData: ISuperObject; aMaxwait_ms: Cardinal = INFINITE): ISuperobject;
     //procedure Emit(const aEventName: string; const aData: string; const aCallback: TSocketIOMsgJSON = nil; const aOnError: TSocketIOError = nil);overload;
   end;
 
@@ -760,7 +760,7 @@ begin
   begin
     Lock;
     try
-      ASocket._AddRef;
+      //ASocket._AddRef;
       FConnections.Add(nil, socket);  //clients do not have a TIdContext?
     finally
       UnLock;
@@ -949,7 +949,7 @@ begin
     if not FConnections.ContainsValue(ASocket) and
        not FConnectionsGUID.ContainsValue(ASocket) then
     begin
-      ASocket._AddRef;
+      //ASocket._AddRef;
       FConnections.Add(nil, ASocket);  //clients do not have a TIdContext?
     end;
 
@@ -1050,7 +1050,7 @@ begin
 end;
 
 function TIdBaseSocketIOHandling.WriteSocketIOEventSync(const ASocket: ISocketIOContext; const aRoom, aEventName,
-  aJSONArray: string; aMaxwait_ms: Integer = INFINITE): ISuperObject;
+  aJSONArray: string; aMaxwait_ms: Cardinal = INFINITE): ISuperObject;
 var
   sresult: string;
   inr: Integer;
@@ -1579,7 +1579,7 @@ begin
   end;
 end;
 
-function TIdSocketIOHandling.EmitSync(const aEventName: string; const aData: ISuperObject; aMaxwait_ms: Integer = INFINITE): ISuperobject;
+function TIdSocketIOHandling.EmitSync(const aEventName: string; const aData: ISuperObject; aMaxwait_ms: Cardinal = INFINITE): ISuperobject;
 var
   firstcontext, context: ISocketIOContext;
   jsonarray: string;

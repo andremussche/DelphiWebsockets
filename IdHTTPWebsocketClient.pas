@@ -236,7 +236,8 @@ begin
 //  FHeartBeat.Enabled := False;
 //  FHeartBeat.OnTimer := HeartBeatTimer;
 
-  FWriteTimeout := 2 * 1000;
+  FWriteTimeout  := 2 * 1000;
+  ConnectTimeout := 2000;
 end;
 
 procedure TIdHTTPWebsocketClient.AsyncDispatchEvent(const aEvent: TStream);
@@ -367,24 +368,30 @@ begin
     FSocketIO.WriteDisConnect(FSocketIOContext as TSocketIOContext)
   else
     FSocketIO.FreeConnection(FSocketIOContext as TSocketIOContext);
+
 //  IInterface(FSocketIOContext)._Release;
   FSocketIOContext := nil;
 
-  if IOHandler <> nil then
-  begin
-    IOHandler.Lock;
-    try
-      IOHandler.IsWebsocket := False;
+  Lock;
+  try
+    if IOHandler <> nil then
+    begin
+      IOHandler.Lock;
+      try
+        IOHandler.IsWebsocket := False;
 
-      inherited DisConnect(ANotifyPeer);
-      //clear buffer, other still "connected"
-      IOHandler.Clear;
+        inherited DisConnect(ANotifyPeer);
+        //clear buffer, other still "connected"
+        IOHandler.Clear;
 
-      //IOHandler.Free;
-      //IOHandler := TIdIOHandlerWebsocket.Create(nil);
-    finally
-      IOHandler.Unlock;
+        //IOHandler.Free;
+        //IOHandler := TIdIOHandlerWebsocket.Create(nil);
+      finally
+        IOHandler.Unlock;
+      end;
     end;
+  finally
+    UnLock;
   end;
 end;
 
@@ -779,29 +786,34 @@ procedure TIdHTTPWebsocketClient.Ping;
 var
   ws: TIdIOHandlerWebsocket;
 begin
-  ws  := IOHandler as TIdIOHandlerWebsocket;
-  ws.LastPingTime := Now;
+  if TryLock then
+  try
+    ws  := IOHandler as TIdIOHandlerWebsocket;
+    ws.LastPingTime := Now;
 
-  //socket.io?
-  if SocketIOCompatible and ws.IsWebsocket then
-  begin
-    FSocketIO.Lock;
-    try
-      if (FSocketIOContext <> nil) then
-        FSocketIO.WritePing(FSocketIOContext as TSocketIOContext);  //heartbeat socket.io message
-    finally
-      FSocketIO.UnLock;
+    //socket.io?
+    if SocketIOCompatible and ws.IsWebsocket then
+    begin
+      FSocketIO.Lock;
+      try
+        if (FSocketIOContext <> nil) then
+          FSocketIO.WritePing(FSocketIOContext as TSocketIOContext);  //heartbeat socket.io message
+      finally
+        FSocketIO.UnLock;
+      end
     end
-  end
-  //only websocket?
-  else if not SocketIOCompatible and ws.IsWebsocket then
-  begin
-    if ws.TryLock then
-    try
-      ws.WriteData(nil, wdcPing);
-    finally
-      ws.Unlock;
+    //only websocket?
+    else if not SocketIOCompatible and ws.IsWebsocket then
+    begin
+      if ws.TryLock then
+      try
+        ws.WriteData(nil, wdcPing);
+      finally
+        ws.Unlock;
+      end;
     end;
+  finally
+    Unlock;
   end;
 end;
 
@@ -1244,6 +1256,9 @@ begin
     FReconnectThread.Free;
   end;
 
+  if FReconnectlist <> nil then
+    FReconnectlist.Free;
+
   IdWinsock2.closesocket(FTempHandle);
   FTempHandle := 0;
   FChannels.Free;
@@ -1508,24 +1523,29 @@ begin
         chn := TIdHTTPWebsocketClient(l.Items[i]);
         if chn.NoAsyncRead then Continue;
 
-        ws  := chn.IOHandler as TIdIOHandlerWebsocket;
-        if (ws = nil) then Continue;
-
-        if ws.TryLock then     //IOHandler.Readable cannot be done during pending action!
+        if chn.TryLock then
         try
+          ws  := chn.IOHandler as TIdIOHandlerWebsocket;
+          if (ws = nil) then Continue;
+
+          if ws.TryLock then     //IOHandler.Readable cannot be done during pending action!
           try
-            chn.ReadAndProcessData;
-          except
-            on e:Exception do
-            begin
-              l := nil;
-              FChannels.UnlockList;
-              chn.ResetChannel;
-              //raise;
+            try
+              chn.ReadAndProcessData;
+            except
+              on e:Exception do
+              begin
+                l := nil;
+                FChannels.UnlockList;
+                chn.ResetChannel;
+                //raise;
+              end;
             end;
+          finally
+            ws.Unlock;
           end;
         finally
-          ws.Unlock;
+          chn.Unlock;
         end;
       end;
 
