@@ -556,6 +556,8 @@ end;
 
 function TIdIOHandlerWebsocket.WriteDataToTarget(const ABuffer: TIdBytes;
   const AOffset, ALength: Integer): Integer;
+var
+  data: TIdBytes;
 begin
   if UseSingleWriteThread and IsWebsocket and (GetCurrentThreadId <> TIdWebsocketWriteThread.Instance.ThreadID) then
     Assert(False, 'Write done in different thread than TIdWebsocketWriteThread!');
@@ -574,17 +576,19 @@ begin
     end
     else
     begin
+      data := ToBytes(ABuffer, ALength, AOffset);
       {$IFDEF DEBUG_WS}
       if Debughook > 0 then
         OutputDebugString(PChar(Format('Send (ws, TID:%d, P:%d): %s',
-                                       [getcurrentthreadid, Self.Binding.PeerPort, BytesToStringRaw(ABuffer)])));
+                                       [getcurrentthreadid, Self.Binding.PeerPort, BytesToStringRaw(data)])));
+
       {$ENDIF}
       try
         if FWriteTextToTarget then
-          Result := WriteData(ABuffer, wdcText, True{send all at once},
+          Result := WriteData(data, wdcText, True{send all at once},
                               webBit1 in ClientExtensionBits, webBit2 in ClientExtensionBits, webBit3 in ClientExtensionBits)
         else
-          Result := WriteData(ABuffer, wdcBinary, True{send all at once},
+          Result := WriteData(data, wdcBinary, True{send all at once},
                               webBit1 in ClientExtensionBits, webBit2 in ClientExtensionBits, webBit3 in ClientExtensionBits);
       except
         FClosedGracefully := True;
