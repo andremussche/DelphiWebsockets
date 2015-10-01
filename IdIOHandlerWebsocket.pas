@@ -1136,7 +1136,8 @@ begin
     AppendBytes(bData, aData);   //important: send all at once!
     ioffset := 0;
     repeat
-      Result := Binding.Send(bData, ioffset);
+      //Result := Binding.Send(bData, ioffset);
+      Result := inherited WriteDataToTarget(bdata, iOffset, (Length(bData) - ioffset));    //ssl compatible?
       Inc(ioffset, Result);
     until ioffset >= Length(bData);
 
