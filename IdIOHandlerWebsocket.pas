@@ -11,6 +11,9 @@ uses
   Classes, SysUtils,
   IdIOHandlerStack, IdGlobal, IdException, IdBuffer,
   SyncObjs,
+{$IFNDEF WS_NO_SSL}
+  IdSSLOpenSSL,
+{$ENDIF}
   Generics.Collections;
 
 type
@@ -22,11 +25,14 @@ type
   TIdIOHandlerWebsocket   = class;
   EIdWebSocketHandleError = class(EIdSocketHandleError);
 
-  {$if CompilerVersion >= 26}   //XE5
-  TIdTextEncoding = IIdTextEncoding;
-  {$ifend}
-
+  {.$if CompilerVersion >= 26}   //XE5
+  //TIdTextEncoding = IIdTextEncoding;
+  {.$ifend}
+{$IFDEF WS_NO_SSL}
   TIdIOHandlerWebsocket = class(TIdIOHandlerStack)
+{ELSE}
+  TIdIOHandlerWebsocketSSL = class(TIdSSLIOHandlerSocketOpenSSL)
+{$ENDIF}
   private
     FIsServerSide: Boolean;
     FBusyUpgrading: Boolean;
@@ -55,12 +61,15 @@ type
     function ReadFrame(out aFIN, aRSV1, aRSV2, aRSV3: boolean; out aDataCode: TWSDataCode; out aData: TIdBytes): Integer;
     function ReadMessage(var aBuffer: TIdBytes; out aDataCode: TWSDataCode): Integer;
 
-    {$if CompilerVersion >= 26}   //XE5
-    function UTF8Encoding: IIdTextEncoding;
-    {$else}
+    {.$if CompilerVersion >= 26}   //XE5
+    //function UTF8Encoding: IIdTextEncoding;
+    {.$else}
     function UTF8Encoding: TEncoding;
-    {$ifend}
+    {.$ifend}
   public
+{$IFNDEF WS_NO_SSL}
+    procedure ClearSSLOptions;
+{$ENDIF}    
     function WriteData(aData: TIdBytes; aType: TWSDataCode;
                         aFIN: boolean = true; aRSV1: boolean = false; aRSV2: boolean = false; aRSV3: boolean = false): integer;
     property BusyUpgrading : Boolean read FBusyUpgrading write FBusyUpgrading;
@@ -257,6 +266,14 @@ begin
   FCloseCodeSend := False;
   FPendingWriteCount := 0;
 end;
+
+{$IFNDEF WS_NO_SSL}
+procedure TIdIOHandlerWebsocketSSL.ClearSSLOptions;
+begin
+  self.fxSSLOptions.Free;
+  self.fxSSLOptions := nil;
+end;
+{$ENDIF
 
 procedure TIdIOHandlerWebsocket.Close;
 var
@@ -827,17 +844,17 @@ begin
   FLock.Leave;
 end;
 
-{$if CompilerVersion >= 26}   //XE5
-function TIdIOHandlerWebsocket.UTF8Encoding: IIdTextEncoding;
-begin
-  Result := IndyTextEncoding_UTF8;
-end;
-{$else}
+{.$if CompilerVersion >= 26}   //XE5
+//function TIdIOHandlerWebsocket.UTF8Encoding: IIdTextEncoding;
+//begin
+//  Result := IndyTextEncoding_UTF8;
+//end;
+{.$else}
 function TIdIOHandlerWebsocket.UTF8Encoding: TEncoding;
 begin
   Result := TIdTextEncoding.UTF8;
 end;
-{$ifend}
+{.$ifend}
 
 function TIdIOHandlerWebsocket.ReadFrame(out aFIN, aRSV1, aRSV2, aRSV3: boolean;
                                          out aDataCode: TWSDataCode; out aData: TIdBytes): Integer;
@@ -1131,10 +1148,11 @@ begin
 
     AppendBytes(bData, aData);   //important: send all at once!
     ioffset := 0;
+    iDataLength := Length(bData);
     repeat
-      Result := Binding.Send(bData, ioffset);
+      result := inherited WriteDataToTarget(bdata,iOffset, (iDataLength-ioffset));
       Inc(ioffset, Result);
-    until ioffset >= Length(bData);
+    until ioffset >= iDataLenght;
 
 //    if debughook > 0 then
 //      OutputDebugString(PChar(Format('Written (TID:%d, P:%d): %s',
