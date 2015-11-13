@@ -30,8 +30,8 @@ type
   {.$ifend}
 {$IFDEF WS_NO_SSL}
   TIdIOHandlerWebsocket = class(TIdIOHandlerStack)
-{ELSE}
-  TIdIOHandlerWebsocketSSL = class(TIdSSLIOHandlerSocketOpenSSL)
+{$ELSE}
+  TIdIOHandlerWebsocket = class(TIdSSLIOHandlerSocketOpenSSL)
 {$ENDIF}
   private
     FIsServerSide: Boolean;
@@ -268,12 +268,12 @@ begin
 end;
 
 {$IFNDEF WS_NO_SSL}
-procedure TIdIOHandlerWebsocketSSL.ClearSSLOptions;
+procedure TIdIOHandlerWebsocket.ClearSSLOptions;
 begin
   self.fxSSLOptions.Free;
   self.fxSSLOptions := nil;
 end;
-{$ENDIF
+{$ENDIF}
 
 procedure TIdIOHandlerWebsocket.Close;
 var
@@ -1152,7 +1152,7 @@ begin
     repeat
       result := inherited WriteDataToTarget(bdata,iOffset, (iDataLength-ioffset));
       Inc(ioffset, Result);
-    until ioffset >= iDataLenght;
+    until ioffset >= iDataLength;
 
 //    if debughook > 0 then
 //      OutputDebugString(PChar(Format('Written (TID:%d, P:%d): %s',

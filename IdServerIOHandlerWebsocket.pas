@@ -12,7 +12,7 @@ uses
   IdIOHandlerWebsocket;
 
 type
-{$IFNDEF WS_NO_SSL}
+{$IFDEF WS_NO_SSL}
   TIdServerIOHandlerWebsocket = class(TIdServerIOHandlerStack)
 {$ELSE}
   TIdServerIOHandlerWebsocket = class(TIdServerIOHandlersslOpenSSL)
@@ -33,7 +33,7 @@ function TIdServerIOHandlerWebsocket.Accept(ASocket: TIdSocketHandle;
   AListenerThread: TIdThread; AYarn: TIdYarn): TIdIOHandler;
 {$IFNDEF WS_NO_SSL}
 var
-  LIO: TIdIOHandlerWebsocketSSL;
+  LIO: TIdIOHandlerWebsocket;
 {$ENDIF}
 begin
 {$IFDEF WS_NO_SSL}
@@ -75,8 +75,9 @@ end;
 procedure TIdServerIOHandlerWebsocket.InitComponent;
 begin
   inherited InitComponent;
-//TODO: Check if this is necessary for SSL
+{$IFDEF WS_NO_SSL}
   IOHandlerSocketClass := TIdIOHandlerWebsocket;
+{$ENDIF}
 end;
 
 function TIdServerIOHandlerWebsocket.MakeClientIOHandler(
