@@ -13,13 +13,13 @@ uses
   {$IFEND}
   IdIOHandler,
   IdIOHandlerWebsocket,
-  {$ifdef FMX}
-  FMX.Types,
-  {$ELSE}
-  ExtCtrls,
-  {$ENDIF}
+//  {$ifdef FMX}
+//  FMX.Types,
+//  {$ELSE}
+//  ExtCtrls,
+//  {$ENDIF}
   IdWinsock2, Generics.Collections, SyncObjs,
-  IdSocketIOHandling;
+  IdSocketIOHandling, IdIOHandlerStack;
 
 type
   TWebsocketMsgBin  = procedure(const aData: TStream) of object;
@@ -39,11 +39,14 @@ type
     FOnTextData: TWebsocketMsgText;
     FNoAsyncRead: Boolean;
     FWriteTimeout: Integer;
-    function  GetIOHandlerWS: TIdIOHandlerWebsocket;
-    procedure SetIOHandlerWS(const Value: TIdIOHandlerWebsocket);
+    FUseSSL: boolean;
+    FWebsocketImpl: TWebsocketImplementationProxy;
+    function  GetIOHandlerWS: TWebsocketImplementationProxy;
     procedure SetOnData(const Value: TWebsocketMsgBin);
     procedure SetOnTextData(const Value: TWebsocketMsgText);
     procedure SetWriteTimeout(const Value: Integer);
+    function GetIOHandler: TIdIOHandlerStack;
+    procedure SetIOHandlerStack(const Value: TIdIOHandlerStack);
   protected
     FSocketIOCompatible: Boolean;
     FSocketIOHandshakeResponse: string;
@@ -81,7 +84,8 @@ type
     procedure Ping;
     procedure ReadAndProcessData;
 
-    property  IOHandler: TIdIOHandlerWebsocket read GetIOHandlerWS write SetIOHandlerWS;
+    property  IOHandler: TIdIOHandlerStack read GetIOHandler write SetIOHandlerStack;
+    property  IOHandlerWS: TWebsocketImplementationProxy read GetIOHandlerWS; // write SetIOHandlerWS;
 
     //websockets
     property  OnBinData : TWebsocketMsgBin read FOnData write SetOnData;
@@ -96,42 +100,10 @@ type
     property  Host;
     property  Port;
     property  WSResourceName: string read FWSResourceName write FWSResourceName;
+    property  UseSSL: boolean        read FUseSSL write FUseSSL;
 
     property  WriteTimeout: Integer read FWriteTimeout write SetWriteTimeout default 2000;
   end;
-
-//  on error
-  (*
-  TIdHTTPSocketIOClient_old = class(TIdHTTPWebsocketClient)
-  private
-    FOnConnected: TNotifyEvent;
-    FOnDisConnected: TNotifyEvent;
-    FOnSocketIOMsg: TSocketIOMsg;
-    FOnSocketIOEvent: TSocketIOMsg;
-    FOnSocketIOJson: TSocketIOMsg;
-  protected
-    FHeartBeat: TTimer;
-    procedure HeartBeatTimer(Sender: TObject);
-
-    procedure InternalUpgradeToWebsocket(aRaiseException: Boolean; out aFailedReason: string);override;
-  public
-    procedure AsyncDispatchEvent(const aEvent: string); override;
-  public
-    procedure  AfterConstruction; override;
-    destructor Destroy; override;
-
-    procedure AutoConnect;
-
-    property  SocketIOHandshakeResponse: string read FSocketIOHandshakeResponse;
-    property  OnConnected: TNotifyEvent read FOnConnected write FOnConnected;
-    property  OnDisConnected: TNotifyEvent read FOnDisConnected write FOnDisConnected;
-
-//    procedure ProcessSocketIORequest(const strmRequest: TStream);
-    property  OnSocketIOMsg  : TSocketIOMsg read FOnSocketIOMsg write FOnSocketIOMsg;
-    property  OnSocketIOJson : TSocketIOMsg read FOnSocketIOJson write FOnSocketIOJson;
-    property  OnSocketIOEvent: TSocketIOMsg read FOnSocketIOEvent write FOnSocketIOEvent;
-  end;
-  *)
 
   TWSThreadList = class(TThreadList)
   public
@@ -191,35 +163,6 @@ uses
 var
   GUnitFinalized: Boolean = false;
 
-//type
-//  TAnonymousThread = class(TThread)
-//  protected
-//    FThreadProc: TThreadProcedure;
-//    procedure Execute; override;
-//  public
-//    constructor Create(AThreadProc: TThreadProcedure);
-//  end;
-
-//procedure CreateAnonymousThread(AThreadProc: TThreadProcedure);
-//begin
-//  TAnonymousThread.Create(AThreadProc);
-//end;
-
-{ TAnonymousThread }
-
-//constructor TAnonymousThread.Create(AThreadProc: TThreadProcedure);
-//begin
-//  FThreadProc := AThreadProc;
-//  FreeOnTerminate := True;
-//  inherited Create(False {direct start});
-//end;
-//
-//procedure TAnonymousThread.Execute;
-//begin
-//  if Assigned(FThreadProc) then
-//    FThreadProc();
-//end;
-
 { TIdHTTPWebsocketClient }
 
 procedure TIdHTTPWebsocketClient.AfterConstruction;
@@ -227,9 +170,9 @@ begin
   inherited;
   FHash := TIdHashSHA1.Create;
 
-  IOHandler := TIdIOHandlerWebsocket.Create(nil);
-  IOHandler.UseNagle := False;
-  ManagedIOHandler := True;
+  //IOHandler := TIdIOHandlerWebsocket.Create(nil);
+  //IOHandler.RealIOHandler.UseNagle := False;
+  //ManagedIOHandler := True;
 
   FSocketIO  := TIdSocketIOHandling_Ext.Create;
 //  FHeartBeat := TTimer.Create(nil);
@@ -326,7 +269,7 @@ begin
     else
     begin
       //clear inputbuffer, otherwise it can't connect :(
-      if (IOHandler <> nil) then IOHandler.Clear;
+      if (IOHandlerWS <> nil) then IOHandlerWS.Clear;
       inherited Connect;
     end;
   finally
@@ -351,7 +294,8 @@ begin
 //      tmr.Free;
 //    end);
 
-  TIdWebsocketMultiReadThread.Instance.RemoveClient(Self);
+  //TIdWebsocketMultiReadThread.Instance.RemoveClient(Self);
+  DisConnect(True);
   FSocketIO.Free;
   FHash.Free;
   inherited;
@@ -360,7 +304,7 @@ end;
 procedure TIdHTTPWebsocketClient.DisConnect(ANotifyPeer: Boolean);
 begin
   if not SocketIOCompatible and
-     ( (IOHandler <> nil) and not IOHandler.IsWebsocket)
+     ( (IOHandlerWS <> nil) and not IOHandlerWS.IsWebsocket)
   then
     TIdWebsocketMultiReadThread.Instance.RemoveClient(Self);
 
@@ -376,18 +320,19 @@ begin
   try
     if IOHandler <> nil then
     begin
-      IOHandler.Lock;
+    IOHandlerWS.Lock;
       try
-        IOHandler.IsWebsocket := False;
+      IOHandlerWS.IsWebsocket := False;
 
+      Self.ManagedIOHandler := False;       //otherwise it gets freed while we have a lock on it...
         inherited DisConnect(ANotifyPeer);
         //clear buffer, other still "connected"
-        IOHandler.Clear;
+      IOHandlerWS.Clear;
 
         //IOHandler.Free;
         //IOHandler := TIdIOHandlerWebsocket.Create(nil);
       finally
-        IOHandler.Unlock;
+      IOHandlerWS.Unlock;
       end;
     end;
   finally
@@ -395,71 +340,31 @@ begin
   end;
 end;
 
-function TIdHTTPWebsocketClient.GetIOHandlerWS: TIdIOHandlerWebsocket;
+function TIdHTTPWebsocketClient.GetIOHandler: TIdIOHandlerStack;
 begin
-//  if inherited IOHandler is TIdIOHandlerWebsocket then
-    Result := inherited IOHandler as TIdIOHandlerWebsocket
-//  else
-//    Assert(False);
+  Result := inherited IOHandler as TIdIOHandlerStack;
+  if Result = nil then
+begin
+    inherited IOHandler := MakeImplicitClientHandler;
+    Result    := inherited IOHandler as TIdIOHandlerStack;
+  end;
 end;
+
+function TIdHTTPWebsocketClient.GetIOHandlerWS: TWebsocketImplementationProxy;
+begin
+  if FWebsocketImpl = nil then
+      begin
+    inherited IOHandler := Self.MakeImplicitClientHandler;
+    Assert(FWebsocketImpl <> nil);
+      end;
+
+  Result := FWebsocketImpl;
+  end;
 
 function TIdHTTPWebsocketClient.GetSocketIO: TIdSocketIOHandling;
 begin
   Result := FSocketIO;
 end;
-
-(*
-procedure TIdHTTPWebsocketClient.HeartBeatTimer(Sender: TObject);
-begin
-  FHeartBeat.Enabled := False;
-  FSocketIO.Lock;
-  try
-    try
-      if (IOHandler <> nil) and
-         not IOHandler.ClosedGracefully and
-         IOHandler.Connected and
-         (FSocketIOContext <> nil) then
-      begin
-        FSocketIO.WritePing(FSocketIOContext as TSocketIOContext);  //heartbeat socket.io message
-      end
-      //retry re-connect
-      else
-      try
-        //clear inputbuffer, otherwise it can't connect :(
-        if (IOHandler <> nil) then
-          IOHandler.Clear;
-
-        Self.ConnectTimeout := 100;  //100ms otherwise GUI hangs too much -> todo: do it in background thread!
-        if not Connected then
-          Self.Connect;
-        TryUpgradeToWebsocket;
-      except
-        //skip, just retried
-      end;
-    except on E:Exception do
-      begin
-        //clear inputbuffer, otherwise it stays connected :(
-        if (IOHandler <> nil) then
-          IOHandler.Clear;
-        Disconnect(False);
-
-        if Assigned(OnDisConnected) then
-          OnDisConnected(Self);
-        try
-          raise EIdException.Create('Connection lost from ' +
-                                    Format('ws://%s:%d/%s', [Host, Port, WSResourceName]) +
-                                    ' - Error: ' + e.Message);
-        except
-          //eat, no error popup!
-        end;
-      end;
-    end;
-  finally
-    FSocketIO.UnLock;
-    FHeartBeat.Enabled := True;  //always enable: in case of disconnect it will re-connect
-  end;
-end;
-*)
 
 function TIdHTTPWebsocketClient.TryConnect: Boolean;
 begin
@@ -493,7 +398,7 @@ begin
     FSocketIOConnectBusy := True;
     Lock;
     try
-      if (IOHandler <> nil) and IOHandler.IsWebsocket then Exit(True);
+      if (IOHandler <> nil) and IOHandlerWS.IsWebsocket then Exit(True);
 
       InternalUpgradeToWebsocket(False{no raise}, sError);
       Result := (sError = '');
@@ -519,7 +424,7 @@ begin
   try
     if IOHandler = nil then
       Connect
-    else if not IOHandler.IsWebsocket then
+    else if not IOHandlerWS.IsWebsocket then
       InternalUpgradeToWebsocket(True{raise}, sError);
   finally
     UnLock;
@@ -535,7 +440,7 @@ var
   sSocketioextended: string;
   bLocked: boolean;
 begin
-  Assert((IOHandler = nil) or not IOHandler.IsWebsocket);
+  Assert((IOHandler = nil) or not IOHandlerWS.IsWebsocket);
   //remove from thread during connection handling
   TIdWebsocketMultiReadThread.Instance.RemoveClient(Self);
 
@@ -546,10 +451,10 @@ begin
     //reset pending data
     if IOHandler <> nil then
     begin
-      IOHandler.Lock;
+      IOHandlerWS.Lock;
       bLocked := True;
-      if IOHandler.IsWebsocket then Exit;
-      IOHandler.Clear;
+      if IOHandlerWS.IsWebsocket then Exit;
+      IOHandlerWS.Clear;
     end;
 
     //special socket.io handling, see https://github.com/LearnBoost/socket.io-spec
@@ -557,10 +462,17 @@ begin
     begin
       Request.Clear;
       Request.Connection := 'keep-alive';
+
+      if UseSSL then
+        sURL := Format('https://%s:%d/socket.io/1/', [Host, Port])
+      else
       sURL := Format('http://%s:%d/socket.io/1/', [Host, Port]);
       strmResponse.Clear;
 
       ReadTimeout := 5 * 1000;
+      if DebugHook > 0 then
+        ReadTimeout := ReadTimeout * 10;
+
       //get initial handshake
       Post(sURL, strmResponse, strmResponse);
       if ResponseCode = 200 {OK} then
@@ -625,10 +537,15 @@ begin
     //ws://host:port/<resourcename>
     //about resourcename, see: http://dev.w3.org/html5/websockets/ "Parsing WebSocket URLs"
     //sURL := Format('ws://%s:%d/%s', [Host, Port, WSResourceName]);
+
+    if UseSSL then
+      sURL := Format('https://%s:%d/%s', [Host, Port, WSResourceName])
+    else
     sURL := Format('http://%s:%d/%s', [Host, Port, WSResourceName]);
+
     ReadTimeout := Max(5 * 1000, ReadTimeout);
 
-    { voorbeeld:
+    { example:
     GET http://localhost:9222/devtools/page/642D7227-148E-47C2-B97A-E00850E3AFA3 HTTP/1.1
     Upgrade: websocket
     Connection: Upgrade
@@ -642,49 +559,8 @@ begin
     User-Agent: Mozilla/5.0 (Windows NT 6.1; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/27.0.1453.116 Safari/537.36
     Cookie: __utma=1.2040118404.1366961318.1366961318.1366961318.1; __utmc=1; __utmz=1.1366961318.1.1.utmcsr=(direct)|utmccn=(direct)|utmcmd=(none); deviceorder=0123456789101112; MultiTouchEnabled=false; device=3; network_type=0
     }
-    if SocketIOCompatible then
-    begin
-      //1st, try to do socketio specific connection
-      Response.Clear;
-      Response.ResponseCode := 0;
-      Request.URL    := sURL;
-      Request.Method := Id_HTTPMethodGet;
-      Request.Source := nil;
-      Response.ContentStream := strmResponse;
-      PrepareRequest(Request);
-
-      //connect and upgrade
-      ConnectToHost(Request, Response);
-
-      //check upgrade succesfull
-      CheckForGracefulDisconnect(True);
-      CheckConnected;
-      Assert(Self.Connected);
-
-      if Response.ResponseCode = 0 then
-        Response.ResponseText := Response.ResponseText
-      else if Response.ResponseCode <> 200{ok} then
-      begin
-        aFailedReason := Format('Error while upgrading: "%d: %s"',[ResponseCode, ResponseText]);
-        if aRaiseException then
-          raise EIdWebSocketHandleError.Create(aFailedReason)
-        else
-          Exit;
-      end;
-
-      //2nd, get websocket response
-      Response.Clear;
-      if IOHandler.CheckForDataOnSource(ReadTimeout) then
-      begin
-        Self.FHTTPProto.RetrieveHeaders(MaxHeaderLines);
-        //Response.RawHeaders.Text := IOHandler.InputBufferAsString();
-        Response.ResponseText := Response.RawHeaders.Text;
-      end;
-    end
-    else
     begin
       Get(sURL, strmResponse, [101]);
-    end;
 
     //http://www.websocket.org/aboutwebsocket.html
     (* HTTP/1.1 101 WebSocket Protocol Handshake
@@ -698,9 +574,9 @@ begin
        Access-Control-Allow-Headers: content-type *)
 
     //'HTTP/1.1 101 Switching Protocols'
-    if Response.ResponseCode <> 101 then
+      if ResponseCode <> 101 then
     begin
-      aFailedReason := Format('Error while upgrading: "%d: %s"',[Response.ResponseCode, Response.ResponseText]);
+        aFailedReason := Format('Error while upgrading: "%d: %s"',[ResponseCode, ResponseText]);
       if aRaiseException then
         raise EIdWebSocketHandleError.Create(aFailedReason)
       else
@@ -737,9 +613,10 @@ begin
       else
         Exit;
     end;
+    end;
 
     //upgrade succesful
-    IOHandler.IsWebsocket := True;
+    IOHandlerWS.IsWebsocket := True;
     aFailedReason := '';
     Assert(Connected);
 
@@ -758,7 +635,7 @@ begin
     strmResponse.Free;
 
     if bLocked and (IOHandler <> nil) then
-      IOHandler.Unlock;
+      IOHandlerWS.Unlock;
     Unlock;
 
     //add to thread for auto retry/reconnect
@@ -779,16 +656,27 @@ end;
 
 function TIdHTTPWebsocketClient.MakeImplicitClientHandler: TIdIOHandler;
 begin
-  Result := TIdIOHandlerWebsocket.Create(nil);
+  if UseSSL then
+  begin
+    Result := TIdIOHandlerWebsocketSSL.Create(nil);
+    FWebsocketImpl := (Result as TIdIOHandlerWebsocketSSL).WebsocketImpl;
+  end
+  else
+  begin
+    Result := TIdIOHandlerWebsocketPlain.Create(nil);
+    FWebsocketImpl := (Result as TIdIOHandlerWebsocketPlain).WebsocketImpl;
+  end;
+
+  (Result as TIdIOHandlerStack).UseNagle := False;
 end;
 
 procedure TIdHTTPWebsocketClient.Ping;
 var
-  ws: TIdIOHandlerWebsocket;
+  ws: TWebsocketImplementationProxy;
 begin
   if TryLock then
   try
-    ws  := IOHandler as TIdIOHandlerWebsocket;
+    ws  := IOHandlerWS;
     ws.LastPingTime := Now;
 
     //socket.io?
@@ -824,10 +712,10 @@ var
   wscode: TWSDataCode;
 begin
   strmEvent := nil;
-  IOHandler.Lock;
+  IOHandlerWS.Lock;
   try
     //try to process all events
-    while IOHandler.HasData or
+    while IOHandlerWS.HasData or
           (IOHandler.Connected and
            IOHandler.Readable(0)) do     //has some data
     begin
@@ -867,7 +755,7 @@ begin
       end;
     end;
   finally
-    IOHandler.Unlock;
+    IOHandlerWS.Unlock;
     strmEvent.Free;
   end;
 end;
@@ -881,8 +769,8 @@ begin
   if IOHandler <> nil then
   begin
     IOHandler.InputBuffer.Clear;
-    IOHandler.BusyUpgrading := False;
-    IOHandler.IsWebsocket   := False;
+    IOHandlerWS.BusyUpgrading := False;
+    IOHandlerWS.IsWebsocket   := False;
     //close/disconnect internal socket
     //ws := IndyClient.IOHandler as TIdIOHandlerWebsocket;
     //ws.Close;  done in disconnect below
@@ -890,10 +778,9 @@ begin
   Disconnect(False);
 end;
 
-procedure TIdHTTPWebsocketClient.SetIOHandlerWS(
-  const Value: TIdIOHandlerWebsocket);
+procedure TIdHTTPWebsocketClient.SetIOHandlerStack(const Value: TIdIOHandlerStack);
 begin
-  SetIOHandler(Value);
+  inherited IOHandler := Value;
 end;
 
 procedure TIdHTTPWebsocketClient.SetOnData(const Value: TWebsocketMsgBin);
@@ -928,253 +815,6 @@ begin
   if Connected then
     Self.IOHandler.Binding.SetSockOpt(SOL_SOCKET, SO_SNDTIMEO, Self.WriteTimeout);
 end;
-
-{ TIdHTTPSocketIOClient }
-
-(*
-procedure TIdHTTPSocketIOClient_old.AfterConstruction;
-begin
-  inherited;
-  SocketIOCompatible := True;
-
-  FHeartBeat := TTimer.Create(nil);
-  FHeartBeat.Enabled := False;
-  FHeartBeat.OnTimer := HeartBeatTimer;
-end;
-
-procedure TIdHTTPSocketIOClient_old.AsyncDispatchEvent(const aEvent: string);
-begin
-  //https://github.com/LearnBoost/socket.io-spec
-  if StartsStr('1:', aEvent) then  //connect
-    Exit;
-  if aEvent = '2::' then  //ping, heartbeat
-    Exit;
-  inherited AsyncDispatchEvent(aEvent);
-end;
-
-procedure TIdHTTPSocketIOClient_old.AutoConnect;
-begin
-  //for now: timer in mainthread?
-  TThread.Queue(nil,
-    procedure
-    begin
-      FHeartBeat.Interval := 5 * 1000;
-      FHeartBeat.Enabled  := True;
-    end);
-end;
-
-destructor TIdHTTPSocketIOClient_old.Destroy;
-var tmr: TObject;
-begin
-  tmr := FHeartBeat;
-  TThread.Queue(nil,    //otherwise free in other thread than created
-    procedure
-    begin
-      //FHeartBeat.Free;
-      tmr.Free;
-    end);
-  inherited;
-end;
-
-procedure TIdHTTPSocketIOClient_old.HeartBeatTimer(Sender: TObject);
-begin
-  FHeartBeat.Enabled := False;
-  try
-    try
-      if (IOHandler <> nil) and
-         not IOHandler.ClosedGracefully and
-         IOHandler.Connected then
-      begin
-        IOHandler.Write('2:::');  //heartbeat socket.io message
-      end
-      //retry connect
-      else
-      try
-        //clear inputbuffer, otherwise it can't connect :(
-        if (IOHandler <> nil) and
-           not IOHandler.InputBufferIsEmpty
-        then
-          IOHandler.DiscardAll;
-
-        Self.Connect;
-        TryUpgradeToWebsocket;
-      except
-        //skip, just retried
-      end;
-    except
-      //clear inputbuffer, otherwise it stays connected :(
-      if (IOHandler <> nil) and
-         not IOHandler.InputBufferIsEmpty
-      then
-        IOHandler.DiscardAll;
-
-      if Assigned(OnDisConnected) then
-        OnDisConnected(Self);
-      try
-        raise EIdException.Create('Connection lost from ' + Format('ws://%s:%d/%s', [Host, Port, WSResourceName]));
-      except
-        //eat, no error popup!
-      end;
-    end;
-  finally
-    FHeartBeat.Enabled := True;  //always enable: in case of disconnect it will re-connect
-  end;
-end;
-
-procedure TIdHTTPSocketIOClient_old.InternalUpgradeToWebsocket(
-  aRaiseException: Boolean; out aFailedReason: string);
-var
-  stimeout: string;
-begin
-  inherited InternalUpgradeToWebsocket(aRaiseException, aFailedReason);
-
-  if (aFailedReason = '') and
-     (IOHandler as TIdIOHandlerWebsocket).IsWebsocket then
-  begin
-    stimeout := Copy(SocketIOHandshakeResponse, Pos(':', SocketIOHandshakeResponse)+1, Length(SocketIOHandshakeResponse));
-    stimeout := Copy(stimeout, 1, Pos(':', stimeout)-1);
-    if stimeout <> '' then
-    begin
-      //if (FHeartBeat.Interval > 0) then
-        //for now: timer in mainthread?
-        TThread.Queue(nil,
-          procedure
-          begin
-            FHeartBeat.Interval := StrToIntDef(stimeout, 15) * 1000;
-            if FHeartBeat.Interval >= 15000 then
-              //FHeartBeat.Interval := FHeartBeat.Interval - 5000
-              FHeartBeat.Interval := 5000
-            else if FHeartBeat.Interval >= 5000 then
-              FHeartBeat.Interval := FHeartBeat.Interval - 2000;
-
-            FHeartBeat.Enabled := (FHeartBeat.Interval > 0);
-          end);
-    end;
-
-    if Assigned(OnConnected) then
-      OnConnected(Self);
-  end;
-end;
-
-)
-procedure TIdHTTPSocketIOClient_old.ProcessSocketIORequest(
-  const strmRequest: TStream);
-
-  function __ReadToEnd: string;
-  var
-    utf8: TBytes;
-    ilength: Integer;
-  begin
-    Result := '';
-    ilength := strmRequest.Size - strmRequest.Position;
-    SetLength(utf8, ilength);
-    strmRequest.Read(utf8[0], ilength);
-    Result := TEncoding.UTF8.GetString(utf8);
-  end;
-
-  function __GetSocketIOPart(const aData: string; aIndex: Integer): string;
-  var ipos: Integer;
-    i: Integer;
-  begin
-    //'5::/chat:{"name":"hi!"}'
-    //0 = 5
-    //1 =
-    //2 = /chat
-    //3 = {"name":"hi!"}
-    ipos := 0;
-    for i := 0 to aIndex-1 do
-      ipos := PosEx(':', aData, ipos+1);
-    if ipos >= 0 then
-    begin
-      Result := Copy(aData, ipos+1, Length(aData));
-      if aIndex < 3 then                      // /chat:{"name":"hi!"}'
-      begin
-        ipos   := PosEx(':', Result, 1);      // :{"name":"hi!"}'
-        if ipos > 0 then
-          Result := Copy(Result, 1, ipos-1);  // /chat
-      end;
-    end;
-  end;
-
-var
-  str, smsg, schannel, sdata: string;
-  imsg: Integer;
-//  bCallback: Boolean;
-begin
-  str := __ReadToEnd;
-  if str = '' then Exit;
-
-  //5:1+:/chat:test
-  smsg      := __GetSocketIOPart(str, 1);
-  imsg      := 0;
-//  bCallback := False;
-  if smsg <> '' then                                       // 1+
-  begin
-    imsg    := StrToIntDef(ReplaceStr(smsg,'+',''), 0);    // 1
-//    bCallback := (Pos('+', smsg) > 1);  //trailing +, e.g.    1+
-  end;
-  schannel  := __GetSocketIOPart(str, 2);                  // /chat
-  sdata     := __GetSocketIOPart(str, 3);                  // test
-
-  //(0) Disconnect
-  if StartsStr('0:', str) then
-  begin
-    schannel := __GetSocketIOPart(str, 2);
-    if schannel <> '' then
-      //todo: close channel
-    else
-      Self.Disconnect;
-  end
-  //(1) Connect
-  //'1::' [path] [query]
-  else if StartsStr('1:', str) then
-  begin
-    //todo: add channel/room to authorized channel/room list
-    Self.IOHandler.Write(str);  //write same connect back, e.g. 1::/chat
-  end
-  //(2) Heartbeat
-  else if StartsStr('2:', str) then
-  begin
-    Self.IOHandler.Write(str);  //write same connect back, e.g. 2::
-  end
-  //(3) Message (https://github.com/LearnBoost/socket.io-spec#3-message)
-  //'3:' [message id ('+')] ':' [message endpoint] ':' [data]
-  //3::/chat:hi
-  else if StartsStr('3:', str) then
-  begin
-    if Assigned(OnSocketIOMsg) then
-      OnSocketIOMsg(Self, sdata, imsg);
-  end
-  //(4) JSON Message
-  //'4:' [message id ('+')] ':' [message endpoint] ':' [json]
-  //4:1::{"a":"b"}
-  else if StartsStr('4:', str) then
-  begin
-    if Assigned(OnSocketIOJson) then
-      OnSocketIOJson(Self, sdata, imsg);
-  end
-  //(5) Event
-  //'5:' [message id ('+')] ':' [message endpoint] ':' [json encoded event]
-  //5::/chat:{"name":"my other event","args":[{"my":"data"}]}
-  //5:1+:/chat:{"name":"GetLocations","args":[""]}
-  else if StartsStr('5:', str) then
-  begin
-    if Assigned(OnSocketIOEvent) then
-      OnSocketIOEvent(Self, sdata, imsg);
-  end
-  //(6) ACK
-  //6::/news:1+["callback"]
-  //6:::1+["Response"]
-  //(7) Error
-  //(8) Noop
-  else if StartsStr('8:', str) then
-  begin
-    //nothing
-  end
-  else
-    raise Exception.CreateFmt('Unsupported data: "%s"', [str]);
-end;
-*)
 
 { TIdWebsocketMultiReadThread }
 
@@ -1315,7 +955,7 @@ procedure TIdWebsocketMultiReadThread.PingAllChannels;
 var
   l: TList;
   chn: TIdHTTPWebsocketClient;
-  ws: TIdIOHandlerWebsocket;
+  ws: TWebsocketImplementationProxy;
   i: Integer;
 begin
   if Terminated then Exit;
@@ -1327,10 +967,10 @@ begin
       chn := TIdHTTPWebsocketClient(l.Items[i]);
       if chn.NoAsyncRead then Continue;
 
-      ws  := chn.IOHandler as TIdIOHandlerWebsocket;
+      ws  := chn.IOHandlerWS;
       //valid?
       if (chn.IOHandler <> nil) and
-         (chn.IOHandler.IsWebsocket) and
+         (chn.IOHandlerWS.IsWebsocket) and
          (chn.Socket <> nil) and
          (chn.Socket.Binding <> nil) and
          (chn.Socket.Binding.Handle > 0) and
@@ -1397,7 +1037,7 @@ begin
             end;
 
             //try reconnect
-            ws := chn.IOHandler as TIdIOHandlerWebsocket;
+            ws := chn.IOHandlerWS;
             if ( (ws = nil) or
                  (SecondsBetween(Now, ws.LastActivityTime) >= 5) ) then
             begin
@@ -1439,7 +1079,7 @@ var
   iCount,
   i: Integer;
   iResult: NativeInt;
-  ws: TIdIOHandlerWebsocket;
+  ws: TWebsocketImplementationProxy;
 begin
   l := FChannels.LockList;
   try
@@ -1455,13 +1095,13 @@ begin
       //valid?
       if //not chn.Busy and    also take busy channels (will be ignored later), otherwise we have to break/reset for each RO function execution
          (chn.IOHandler <> nil) and
-         (chn.IOHandler.IsWebsocket) and
+         (chn.IOHandlerWS.IsWebsocket) and
          (chn.Socket <> nil) and
          (chn.Socket.Binding <> nil) and
          (chn.Socket.Binding.Handle > 0) and
          (chn.Socket.Binding.Handle <> INVALID_SOCKET) then
       begin
-        if chn.IOHandler.HasData then
+        if chn.IOHandlerWS.HasData then
         begin
           Inc(iResult);
           Break;
@@ -1519,13 +1159,12 @@ begin
       //check for data for all channels
       for i := 0 to l.Count - 1 do
       begin
-        if l = nil then Exit;
         chn := TIdHTTPWebsocketClient(l.Items[i]);
         if chn.NoAsyncRead then Continue;
 
         if chn.TryLock then
         try
-          ws  := chn.IOHandler as TIdIOHandlerWebsocket;
+          ws  := chn.IOHandlerWS;
           if (ws = nil) then Continue;
 
           if ws.TryLock then     //IOHandler.Readable cannot be done during pending action!

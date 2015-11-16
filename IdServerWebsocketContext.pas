@@ -5,7 +5,7 @@ interface
 uses
   Classes,
   IdCustomTCPServer, IdIOHandlerWebsocket,
-  IdServerBaseHandling, IdServerSocketIOHandling, IdContext;
+  IdServerBaseHandling, IdServerSocketIOHandling, IdContext, IdIOHandlerStack;
 
 type
   TIdServerWSContext = class;
@@ -29,7 +29,8 @@ type
     FSocketIO: TIdServerSocketIOHandling;
     FOnDestroy: TIdContextEvent;
   public
-    function IOHandler: TIdIOHandlerWebsocket;
+    function IOHandler: TIdIOHandlerStack;
+    function WebsocketImpl: TWebsocketImplementationProxy;
   public
     function IsSocketIO: Boolean;
     property SocketIO: TIdServerSocketIOHandling read FSocketIO write FSocketIO;
@@ -67,15 +68,20 @@ begin
   inherited;
 end;
 
-function TIdServerWSContext.IOHandler: TIdIOHandlerWebsocket;
+function TIdServerWSContext.IOHandler: TIdIOHandlerStack;
 begin
-  Result := Self.Connection.IOHandler as TIdIOHandlerWebsocket;
+  Result := Self.Connection.IOHandler as TIdIOHandlerStack;
 end;
 
 function TIdServerWSContext.IsSocketIO: Boolean;
 begin
   //FDocument	= '/socket.io/1/websocket/13412152'
   Result := StartsText('/socket.io/1/websocket/', FPath);
+end;
+
+function TIdServerWSContext.WebsocketImpl: TWebsocketImplementationProxy;
+begin
+  Result := (IOHandler as IWebsocketFunctions).WebsocketImpl;
 end;
 
 end.

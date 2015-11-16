@@ -4,7 +4,7 @@ interface
 
 uses
   IdServerWebsocketHandling, IdServerSocketIOHandling, IdServerWebsocketContext,
-  IdHTTPServer, IdContext, IdCustomHTTPServer, Classes, IdIOHandlerWebsocket;
+  IdHTTPServer, IdContext, IdCustomHTTPServer, Classes, IdIOHandlerWebsocket, IdGlobal, IdServerIOHandler;
 
 type
   TWebsocketMessageText = procedure(const AContext: TIdServerWSContext; const aText: string)  of object;
@@ -16,9 +16,14 @@ type
     FOnMessageText: TWebsocketMessageText;
     FOnMessageBin: TWebsocketMessageBin;
     FWriteTimeout: Integer;
+    FUseSSL: boolean;
     function GetSocketIO: TIdServerSocketIOHandling;
     procedure SetWriteTimeout(const Value: Integer);
+    function  GetIOHandler: TIdServerIOHandler;
   protected
+    procedure Startup; override;
+    procedure DetermineSSLforPort(APort: TIdPort; var VUseSSL: Boolean);
+
     procedure DoCommandGet(AContext: TIdContext; ARequestInfo: TIdHTTPRequestInfo;
      AResponseInfo: TIdHTTPResponseInfo); override;
     procedure ContextCreated(AContext: TIdContext); override;
@@ -35,15 +40,17 @@ type
     property OnMessageText: TWebsocketMessageText read FOnMessageText write FOnMessageText;
     property OnMessageBin : TWebsocketMessageBin  read FOnMessageBin  write FOnMessageBin;
 
+    property IOHandler: TIdServerIOHandler read GetIOHandler write SetIOHandler;
     property SocketIO: TIdServerSocketIOHandling read GetSocketIO;
   published
     property WriteTimeout: Integer read FWriteTimeout write SetWriteTimeout default 2000;
+    property UseSSL: boolean       read FUseSSL write FUseSSL;
   end;
 
 implementation
 
 uses
-  IdServerIOHandlerWebsocket, IdStreamVCL, IdGlobal, Windows, IdWinsock2;
+  IdServerIOHandlerWebsocket, IdStreamVCL, Windows, IdWinsock2, IdSSLOpenSSL, IdSSL, IdThread; //, idIOHandler, idssl;
 
 { TIdWebsocketServer }
 
@@ -54,9 +61,6 @@ begin
   FSocketIO := TIdServerSocketIOHandling_Ext.Create;
 
   ContextClass := TIdServerWSContext;
-  if IOHandler = nil then
-    IOHandler := TIdServerIOHandlerWebsocket.Create(Self);
-
   FWriteTimeout := 2 * 1000;  //2s
 end;
 
@@ -82,6 +86,28 @@ begin
   FSocketIO.Free;
 end;
 
+procedure TIdWebsocketServer.DetermineSSLforPort(APort: TIdPort; var VUseSSL: Boolean);
+//var
+//  thread: TIdThreadWithTask;
+//  ctx: TIdServerWSContext;
+begin
+  VUseSSL := IOHandler.InheritsFrom(TIdServerIOHandlerSSLBase);
+
+  {$message warn 'todo: no ssl for localhost (testing, server IPC, etc)?'}
+  (*
+  //
+  if TThread.CurrentThread is TIdThreadWithTask then
+  begin
+    thread := TThread.CurrentThread as TIdThreadWithTask;
+    ctx    := thread.Task as TIdServerWSContext;
+    //yarn   := thread.Task.Yarn as TIdYarnOfThread;
+
+    if ctx.Binding.PeerIP = '127.0.0.1' then
+      VUseSSL := false;
+  end;
+  *)
+end;
+
 procedure TIdWebsocketServer.DoCommandGet(AContext: TIdContext;
   ARequestInfo: TIdHTTPRequestInfo; AResponseInfo: TIdHTTPResponseInfo);
 begin
@@ -90,6 +116,39 @@ begin
 
   if not TIdServerWebsocketHandling.ProcessServerCommandGet(AContext as TIdServerWSContext, ARequestInfo, AResponseInfo) then
     inherited DoCommandGet(AContext, ARequestInfo, AResponseInfo);
+end;
+
+function TIdWebsocketServer.GetIOHandler: TIdServerIOHandler;
+begin
+  Result := inherited IOHandler;
+
+  if Result = nil then
+  begin
+    if UseSSL then
+    begin
+      Result := TIdServerIOHandlerWebsocketSSL.Create(Self);
+
+      with Result as TIdServerIOHandlerWebsocketSSL do
+      begin
+        //note: custom certificate files must be set by user, e.g. in datamodule OnCreate:
+        //FHttpServer := TIdWebsocketServer.Create;
+        //FHttpServer.UseSSL := True;
+        //with FHttpServer.IOHandler as TIdServerIOHandlerWebsocketSSL do
+        //  SSLOptions.RootCertFile := 'root.cer';
+        //  SSLOptions.CertFile := 'your_cert.cer';
+        //  SSLOptions.KeyFile := 'key.pem';
+
+        SSLOptions.Method := sslvSSLv23;
+        SSLOptions.Mode   := sslmServer;
+
+        OnQuerySSLPort := DetermineSSLforPort;
+      end;
+    end
+    else
+      Result := TIdServerIOHandlerWebsocket.Create(Self);
+
+    inherited IOHandler := Result;
+  end;
 end;
 
 function TIdWebsocketServer.GetSocketIO: TIdServerSocketIOHandling;
@@ -109,7 +168,7 @@ begin
     begin
       ctx := TIdServerWSContext(l.Items[i]);
       Assert(ctx is TIdServerWSContext);
-      if ctx.IOHandler.IsWebsocket and
+      if ctx.WebsocketImpl.IsWebsocket and
          not ctx.IsSocketIO
       then
         ctx.IOHandler.Write(aText);
@@ -122,6 +181,11 @@ end;
 procedure TIdWebsocketServer.SetWriteTimeout(const Value: Integer);
 begin
   FWriteTimeout := Value;
+end;
+
+procedure TIdWebsocketServer.Startup;
+begin
+  inherited;
 end;
 
 procedure TIdWebsocketServer.WebsocketChannelRequest(
@@ -158,7 +222,7 @@ begin
     begin
       ctx := TIdServerWSContext(l.Items[i]);
       Assert(ctx is TIdServerWSContext);
-      if ctx.IOHandler.IsWebsocket and
+      if ctx.WebsocketImpl.IsWebsocket and
          not ctx.IsSocketIO
       then
         ctx.IOHandler.Write(bytes);

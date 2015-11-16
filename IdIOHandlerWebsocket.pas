@@ -11,7 +11,7 @@ uses
   Classes, SysUtils,
   IdIOHandlerStack, IdGlobal, IdException, IdBuffer,
   SyncObjs,
-  Generics.Collections;
+  Generics.Collections, IdSSLOpenSSL, IdIOHandler, IdSocketHandle;
 
 type
   TWSDataType      = (wdtText, wdtBinary);
@@ -19,14 +19,111 @@ type
   TWSExtensionBit  = (webBit1, webBit2, webBit3);
   TWSExtensionBits = set of TWSExtensionBit;
 
-  TIdIOHandlerWebsocket   = class;
+  TWebsocketImplementationProxy = class;
   EIdWebSocketHandleError = class(EIdSocketHandleError);
 
   {$if CompilerVersion >= 26}   //XE5
   TIdTextEncoding = IIdTextEncoding;
   {$ifend}
 
-  TIdIOHandlerWebsocket = class(TIdIOHandlerStack)
+  TInheritedFunctions = record
+  public type
+    TInherited_Connected           = reference to function: Boolean;
+    TInherited_ReadDataFromSource  = reference to function (var VBuffer: TIdBytes): Integer;
+    TInherited_WriteDataToTarget   = reference to function (const ABuffer: TIdBytes; const AOffset, ALength: Integer): Integer;
+    TInherited_Readable            = reference to function (AMSec: Integer = IdTimeoutDefault): Boolean;
+    TInherited_Write               = reference to procedure(const AOut: string; AEncoding: TIdTextEncoding = nil);
+    TInherited_WriteLn             = reference to procedure(const AOut: string; AEncoding: TIdTextEncoding = nil);
+    TInherited_WriteLnRFC          = reference to procedure(const AOut: string = ''; AEncoding: TIdTextEncoding = nil);
+    TInherited_Write2              = reference to procedure(AValue: TStrings; AWriteLinesCount: Boolean = False; AEncoding: TIdTextEncoding = nil);
+    TInherited_WriteBufferFlush    = reference to procedure(AByteCount: Integer);
+    TInherited_Write3              = reference to procedure(AStream: TStream; ASize: TIdStreamSize = 0; AWriteByteCount: Boolean = False);
+    TInherited_ReadBytes           = reference to procedure(var VBuffer: TIdBytes; AByteCount: Integer; AAppend: Boolean = True);
+  public
+    Inherited_Connected          : TInherited_Connected;
+    Inherited_ReadDataFromSource : TInherited_ReadDataFromSource;
+    Inherited_WriteDataToTarget  : TInherited_WriteDataToTarget;
+    Inherited_Readable           : TInherited_Readable;
+    Inherited_Write              : TInherited_Write;
+    Inherited_WriteLn            : TInherited_WriteLn;
+    Inherited_WriteLnRFC         : TInherited_WriteLnRFC;
+    Inherited_Write2             : TInherited_Write2;
+    Inherited_WriteBufferFlush   : TInherited_WriteBufferFlush;
+    Inherited_Write3             : TInherited_Write3;
+    Inherited_ReadBytes          : TInherited_ReadBytes;
+  end;
+
+  IWebsocketFunctions = interface
+    ['{81E49AA4-2B64-41BD-9B3D-24FF757EED80}']
+    function WebsocketImpl: TWebsocketImplementationProxy;
+  end;
+
+  TIdIOHandlerStack_Ext = class(TIdIOHandlerStack);
+
+  TIdIOHandlerWebsocketPlain = class(TIdIOHandlerStack, IWebsocketFunctions) //, IInheritedFunctions)
+  private
+    FWebsocketImpl: TWebsocketImplementationProxy;
+  public
+    {IWebsocketFunctions}
+    function WebsocketImpl: TWebsocketImplementationProxy;
+  protected
+    function ReadDataFromSource(var VBuffer: TIdBytes): Integer; override;
+    function WriteDataToTarget (const ABuffer: TIdBytes; const AOffset, ALength: Integer): Integer; override;
+  public
+    procedure  AfterConstruction;override;
+    destructor Destroy; override;
+
+    function  Readable(AMSec: Integer = IdTimeoutDefault): Boolean; override;
+    function  Connected: Boolean; override;
+    procedure Close; override;
+
+    //text/string writes
+    procedure Write(const AOut: string; AEncoding: TIdTextEncoding = nil); overload; override;
+    procedure WriteLn(const AOut: string; AEncoding: TIdTextEncoding = nil); overload; override;
+    procedure WriteLnRFC(const AOut: string = ''; AEncoding: TIdTextEncoding = nil); override;
+    procedure Write(AValue: TStrings; AWriteLinesCount: Boolean = False; AEncoding: TIdTextEncoding = nil); overload; override;
+    procedure Write(AStream: TStream; aType: TWSDataType); overload;
+    procedure WriteBufferFlush(AByteCount: Integer); override;
+
+    procedure ReadBytes(var VBuffer: TIdBytes; AByteCount: Integer; AAppend: Boolean = True); override;
+  end;
+
+  TIdSSLIOHandlerSocketOpenSSL_Ext = class(TIdSSLIOHandlerSocketOpenSSL);
+
+  TIdIOHandlerWebsocketSSL = class(TIdSSLIOHandlerSocketOpenSSL, IWebsocketFunctions)
+  private
+    FWebsocketImpl: TWebsocketImplementationProxy;
+  public
+    {IWebsocketFunctions}
+    function WebsocketImpl: TWebsocketImplementationProxy;
+  public
+    function ReadDataFromSource(var VBuffer: TIdBytes): Integer; override;
+    function WriteDataToTarget (const ABuffer: TIdBytes; const AOffset, ALength: Integer): Integer; override;
+  public
+    procedure  AfterConstruction;override;
+    destructor Destroy; override;
+
+    procedure ClearSSLOptions;
+
+    function  Readable(AMSec: Integer = IdTimeoutDefault): Boolean; override;
+    function  Connected: Boolean; override;
+    procedure Close; override;
+
+    //text/string writes
+    procedure Write(const AOut: string; AEncoding: TIdTextEncoding = nil); overload; override;
+    procedure WriteLn(const AOut: string; AEncoding: TIdTextEncoding = nil); overload; override;
+    procedure WriteLnRFC(const AOut: string = ''; AEncoding: TIdTextEncoding = nil); override;
+    procedure Write(AValue: TStrings; AWriteLinesCount: Boolean = False; AEncoding: TIdTextEncoding = nil); overload; override;
+    procedure Write(AStream: TStream; aType: TWSDataType); overload;
+    procedure WriteBufferFlush(AByteCount: Integer); override;
+
+    procedure ReadBytes(var VBuffer: TIdBytes; AByteCount: Integer; AAppend: Boolean = True); override;
+  end;
+
+  TWebsocketImplementationProxy = class
+  private
+    FRealIOHandler: TIdIOHandlerStack_Ext;
+    FRealIOHandlerI: TInheritedFunctions;
   private
     FIsServerSide: Boolean;
     FBusyUpgrading: Boolean;
@@ -49,8 +146,8 @@ type
     FPendingWriteCount: Integer;
 
     function InternalReadDataFromSource(var VBuffer: TIdBytes; ARaiseExceptionOnTimeout: Boolean): Integer;
-    function ReadDataFromSource(var VBuffer: TIdBytes): Integer; override;
-    function WriteDataToTarget (const ABuffer: TIdBytes; const AOffset, ALength: Integer): Integer; override;
+    function ReadDataFromSource(var VBuffer: TIdBytes): Integer;
+    function WriteDataToTarget (const ABuffer: TIdBytes; const AOffset, ALength: Integer): Integer;
 
     function ReadFrame(out aFIN, aRSV1, aRSV2, aRSV3: boolean; out aDataCode: TWSDataCode; out aData: TIdBytes): Integer;
     function ReadMessage(var aBuffer: TIdBytes; out aDataCode: TWSDataCode): Integer;
@@ -78,23 +175,23 @@ type
 
     function  HasData: Boolean;
     procedure Clear;
-    function  Readable(AMSec: Integer = IdTimeoutDefault): Boolean; override;
-    function  Connected: Boolean; override;
+    function  Readable(AMSec: Integer = IdTimeoutDefault): Boolean;
+    function  Connected(): Boolean;
 
-    procedure Close; override;
+    procedure Close;
     property  Closing    : Boolean read FClosing;
     property  CloseCode  : Integer read FCloseCode   write FCloseCode;
     property  CloseReason: string  read FCloseReason write FCloseReason;
 
     //text/string writes
-    procedure Write(const AOut: string; AEncoding: TIdTextEncoding = nil); overload; override;
-    procedure WriteLn(const AOut: string; AEncoding: TIdTextEncoding = nil); overload; override;
-    procedure WriteLnRFC(const AOut: string = ''; AEncoding: TIdTextEncoding = nil); override;
-    procedure Write(AValue: TStrings; AWriteLinesCount: Boolean = False; AEncoding: TIdTextEncoding = nil); overload; override;
+    procedure Write(const AOut: string; AEncoding: TIdTextEncoding = nil); overload;
+    procedure WriteLn(const AOut: string; AEncoding: TIdTextEncoding = nil); overload;
+    procedure WriteLnRFC(const AOut: string = ''; AEncoding: TIdTextEncoding = nil);
+    procedure Write(AValue: TStrings; AWriteLinesCount: Boolean = False; AEncoding: TIdTextEncoding = nil); overload;
     procedure Write(AStream: TStream; aType: TWSDataType); overload;
-    procedure WriteBufferFlush(AByteCount: Integer); override;
+    procedure WriteBufferFlush(AByteCount: Integer);
 
-    procedure ReadBytes(var VBuffer: TIdBytes; AByteCount: Integer; AAppend: Boolean = True); override;
+    procedure ReadBytes(var VBuffer: TIdBytes; AByteCount: Integer; AAppend: Boolean = True);
 
     property  LastActivityTime: TDateTime read FLastActivityTime write FLastActivityTime;
     property  LastPingTime: TDateTime read FLastPingTime write FLastPingTime;
@@ -231,19 +328,19 @@ end;
 
 { TIdIOHandlerStack_Websocket }
 
-procedure TIdIOHandlerWebsocket.AfterConstruction;
+procedure TWebsocketImplementationProxy.AfterConstruction;
 begin
-  inherited;
+  inherited AfterConstruction;
   FMessageStream := TMemoryStream.Create;
   FWSInputBuffer := TIdBuffer.Create;
   FLock := TCriticalSection.Create;
   FSelectLock := TCriticalSection.Create;
 end;
 
-procedure TIdIOHandlerWebsocket.Clear;
+procedure TWebsocketImplementationProxy.Clear;
 begin
   FWSInputBuffer.Clear;
-  InputBuffer.Clear;
+  FRealIOHandler.InputBuffer.Clear;
   FBusyUpgrading := False;
   FIsWebsocket := False;
   FClosing := False;
@@ -258,7 +355,7 @@ begin
   FPendingWriteCount := 0;
 end;
 
-procedure TIdIOHandlerWebsocket.Close;
+procedure TWebsocketImplementationProxy.Close;
 var
   iaWriteBuffer: TIdBytes;
   sReason: UTF8String;
@@ -267,14 +364,14 @@ var
 begin
   try
     //valid connection?
-    bConnected := Opened and
-                  SourceIsAvailable and
-                  not ClosedGracefully;
+    bConnected := FRealIOHandler.Opened and
+                  FRealIOHandler.SourceIsAvailable and
+                  not FRealIOHandler.ClosedGracefully;
 
     //no socket error? connection closed by software abort, connection reset by peer, etc
     iOptLen    := SIZE_INTEGER;
     bConnected := bConnected and
-                  (IdWinsock2.getsockopt(Self.Binding.Handle, SOL_SOCKET, SO_ERROR, PAnsiChar(@iOptVal), iOptLen) = 0) and
+                  (IdWinsock2.getsockopt(FRealIOHandler.Binding.Handle, SOL_SOCKET, SO_ERROR, PAnsiChar(@iOptVal), iOptLen) = 0) and
                   (iOptVal = 0);
 
     if bConnected and IsWebsocket then
@@ -315,10 +412,10 @@ begin
       if not Closing then
       begin
         FClosing := True;
-        CheckForDisconnect();
+        FRealIOHandler.CheckForDisconnect();
         //wait till client respond with close message back
         //but a pending message can be in the buffer, so process this too
-        while ReadFromSource(False{no disconnect error}, 1 * 1000, False) > 0 do ; //response within 1s?
+        while FRealIOHandler.ReadFromSource(False{no disconnect error}, 1 * 1000, False) > 0 do ; //response within 1s?
       end;
     end;
   except
@@ -327,25 +424,25 @@ begin
 
   IsWebsocket   := False;
   BusyUpgrading := False;
-  inherited Close;
+  //inherited Close;
 end;
 
-function TIdIOHandlerWebsocket.Connected: Boolean;
+function TWebsocketImplementationProxy.Connected(): Boolean;
 begin
   Lock;
   try
-    Result := inherited Connected;
+    Result := FRealIOHandlerI.Inherited_Connected();
   finally
     Unlock;
   end;
 end;
 
-class constructor TIdIOHandlerWebsocket.Create;
+class constructor TWebsocketImplementationProxy.Create;
 begin
   //UseSingleWriteThread := True;
 end;
 
-destructor TIdIOHandlerWebsocket.Destroy;
+destructor TWebsocketImplementationProxy.Destroy;
 begin
   while FPendingWriteCount > 0 do
     Sleep(1);
@@ -357,29 +454,29 @@ begin
 
   FWSInputBuffer.Free;
   FMessageStream.Free;
-  inherited;
+  inherited Destroy;
 end;
 
-function TIdIOHandlerWebsocket.HasData: Boolean;
+function TWebsocketImplementationProxy.HasData: Boolean;
 begin
   //buffered data available? (more data from previous read)
-  Result := (FWSInputBuffer.Size > 0) or not InputBufferIsEmpty;
+  Result := (FWSInputBuffer.Size > 0) or not FRealIOHandler.InputBufferIsEmpty;
 end;
 
-function TIdIOHandlerWebsocket.InternalReadDataFromSource(
+function TWebsocketImplementationProxy.InternalReadDataFromSource(
   var VBuffer: TIdBytes; ARaiseExceptionOnTimeout: Boolean): Integer;
 begin
   SetLength(VBuffer, 0);
 
-  CheckForDisconnect;
-  if not Readable(ReadTimeout) or
-     not Opened or
-     not SourceIsAvailable then
+  FRealIOHandler.CheckForDisconnect;
+  if not Readable(FRealIOHandler.ReadTimeout) or
+     not FRealIOHandler.Opened or
+     not FRealIOHandler.SourceIsAvailable then
   begin
-    CheckForDisconnect; //disconnected during wait in "Readable()"?
-    if not Opened then
+    FRealIOHandler.CheckForDisconnect; //disconnected during wait in "Readable()"?
+    if not FRealIOHandler.Opened then
       EIdNotConnected.Toss(RSNotConnected)
-    else if not SourceIsAvailable then
+    else if not FRealIOHandler.SourceIsAvailable then
       EIdClosedSocket.Toss(RSStatusDisconnected);
     GStack.CheckForSocketError(GStack.WSGetLastError); //check for socket error
     if ARaiseExceptionOnTimeout then
@@ -388,19 +485,20 @@ begin
       Exit(0);
   end;
 
-  SetLength(VBuffer, RecvBufferSize);
-  Result := inherited ReadDataFromSource(VBuffer);
-  if Result = 0 then
+  SetLength(VBuffer, FRealIOHandler.RecvBufferSize);
+  Result := FRealIOHandlerI.Inherited_ReadDataFromSource(VBuffer);
+  if Result <= 0 then
   begin
-    CheckForDisconnect; //disconnected in the mean time?
+    FRealIOHandler.CheckForDisconnect; //disconnected in the mean time?
     GStack.CheckForSocketError(GStack.WSGetLastError); //check for socket error
     if ARaiseExceptionOnTimeout then
       EIdNoDataToRead.Toss(RSIdNoDataToRead); //nothing read? then connection is probably closed -> exit
-  end;
+  end
+  else
   SetLength(VBuffer, Result);
 end;
 
-procedure TIdIOHandlerWebsocket.WriteLn(const AOut: string;
+procedure TWebsocketImplementationProxy.WriteLn(const AOut: string;
   AEncoding: TIdTextEncoding);
 begin
   if UseSingleWriteThread and IsWebsocket and
@@ -419,7 +517,7 @@ begin
     Lock;
     try
       FWriteTextToTarget := True;
-      inherited WriteLn(AOut, UTF8Encoding);  //must be UTF8!
+      FRealIOHandlerI.Inherited_WriteLn(AOut, UTF8Encoding);  //must be UTF8!
     finally
       FWriteTextToTarget := False;
       Unlock;
@@ -427,7 +525,7 @@ begin
   end;
 end;
 
-procedure TIdIOHandlerWebsocket.WriteLnRFC(const AOut: string;
+procedure TWebsocketImplementationProxy.WriteLnRFC(const AOut: string;
   AEncoding: TIdTextEncoding);
 begin
   if UseSingleWriteThread and IsWebsocket and
@@ -446,7 +544,7 @@ begin
     Lock;
     try
       FWriteTextToTarget := True;
-      inherited WriteLnRFC(AOut, UTF8Encoding);  //must be UTF8!
+      FRealIOHandlerI.Inherited_WriteLnRFC(AOut, UTF8Encoding);  //must be UTF8!
     finally
       FWriteTextToTarget := False;
       Unlock;
@@ -454,7 +552,7 @@ begin
   end;
 end;
 
-procedure TIdIOHandlerWebsocket.Write(const AOut: string;
+procedure TWebsocketImplementationProxy.Write(const AOut: string;
   AEncoding: TIdTextEncoding);
 begin
   if UseSingleWriteThread and IsWebsocket and
@@ -473,7 +571,7 @@ begin
     Lock;
     try
       FWriteTextToTarget := True;
-      inherited Write(AOut, UTF8Encoding);  //must be UTF8!
+      FRealIOHandlerI.Inherited_Write(AOut, UTF8Encoding);  //must be UTF8!
     finally
       FWriteTextToTarget := False;
       Unlock;
@@ -481,7 +579,7 @@ begin
   end;
 end;
 
-procedure TIdIOHandlerWebsocket.Write(AValue: TStrings;
+procedure TWebsocketImplementationProxy.Write(AValue: TStrings;
   AWriteLinesCount: Boolean; AEncoding: TIdTextEncoding);
 begin
   if UseSingleWriteThread and IsWebsocket and
@@ -500,7 +598,7 @@ begin
     Lock;
     try
       FWriteTextToTarget := True;
-      inherited Write(AValue, AWriteLinesCount, UTF8Encoding);  //must be UTF8!
+      FRealIOHandlerI.Inherited_Write2(AValue, AWriteLinesCount, UTF8Encoding);  //must be UTF8!
     finally
       FWriteTextToTarget := False;
       Unlock;
@@ -508,7 +606,7 @@ begin
   end;
 end;
 
-procedure TIdIOHandlerWebsocket.Write(AStream: TStream;
+procedure TWebsocketImplementationProxy.Write(AStream: TStream;
   aType: TWSDataType);
 begin
   if UseSingleWriteThread and IsWebsocket and
@@ -527,7 +625,7 @@ begin
     Lock;
     try
       FWriteTextToTarget := (aType = wdtText);
-      inherited Write(AStream);
+      FRealIOHandlerI.Inherited_Write3(AStream);
     finally
       FWriteTextToTarget := False;
       Unlock;
@@ -535,9 +633,9 @@ begin
   end;
 end;
 
-procedure TIdIOHandlerWebsocket.WriteBufferFlush(AByteCount: Integer);
+procedure TWebsocketImplementationProxy.WriteBufferFlush(AByteCount: Integer);
 begin
-  if (FWriteBuffer = nil) or (FWriteBuffer.Size <= 0) then Exit;
+  if (FRealIOHandler.FWriteBuffer = nil) or (FRealIOHandler.FWriteBuffer.Size <= 0) then Exit;
 
   if UseSingleWriteThread and IsWebsocket and
      (GetCurrentThreadId <> TIdWebsocketWriteThread.Instance.ThreadID) then
@@ -551,10 +649,10 @@ begin
       end)
   end
   else
-    inherited WriteBufferFlush(AByteCount);
+    FRealIOHandlerI.Inherited_WriteBufferFlush(AByteCount);
 end;
 
-function TIdIOHandlerWebsocket.WriteDataToTarget(const ABuffer: TIdBytes;
+function TWebsocketImplementationProxy.WriteDataToTarget(const ABuffer: TIdBytes;
   const AOffset, ALength: Integer): Integer;
 var
   data: TIdBytes;
@@ -570,17 +668,17 @@ begin
       {$IFDEF DEBUG_WS}
       if Debughook > 0 then
         OutputDebugString(PChar(Format('Send (non ws, TID:%d, P:%d): %s',
-                                       [getcurrentthreadid, Self.Binding.PeerPort, BytesToStringRaw(ABuffer)])));
+                                       [getcurrentthreadid, FRealIOHandler.Binding.PeerPort, BytesToStringRaw(ABuffer)])));
       {$ENDIF}
-      Result := inherited WriteDataToTarget(ABuffer, AOffset, ALength)
+      Result := FRealIOHandlerI.inherited_WriteDataToTarget(ABuffer, AOffset, ALength)
     end
     else
     begin
       data := ToBytes(ABuffer, ALength, AOffset);
       {$IFDEF DEBUG_WS}
       if Debughook > 0 then
-        OutputDebugString(PChar(Format('Send (ws, TID:%d, P:%d): %s',
-                                       [getcurrentthreadid, Self.Binding.PeerPort, BytesToStringRaw(data)])));
+        OutputDebugString(PChar(Format('Send (ws, IsServerSide: %s, TID:%d, P:%d): %s',
+                                       [BoolToStr(IsServerSide), getcurrentthreadid, FRealIOHandler.Binding.PeerPort, BytesToStringRaw(data)])));
 
       {$ENDIF}
       try
@@ -591,7 +689,7 @@ begin
           Result := WriteData(data, wdcBinary, True{send all at once},
                               webBit1 in ClientExtensionBits, webBit2 in ClientExtensionBits, webBit3 in ClientExtensionBits);
       except
-        FClosedGracefully := True;
+        FRealIOHandler.FClosedGracefully := True;
         Result := -1;
         Raise;
       end;
@@ -601,37 +699,37 @@ begin
   end;
 end;
 
-function TIdIOHandlerWebsocket.Readable(AMSec: Integer): Boolean;
+function TWebsocketImplementationProxy.Readable(AMSec: Integer): Boolean;
 begin
   if FWSInputBuffer.Size > 0 then Exit(True);
 
   if not FSelectLock.TryEnter then Exit(False);
   try
-    Result := inherited Readable(AMSec);
+    Result := FRealIOHandlerI.Inherited_Readable(AMSec);
   finally
     FSelectLock.Leave;
   end;
 end;
 
-procedure TIdIOHandlerWebsocket.ReadBytes(var VBuffer: TIdBytes;
+procedure TWebsocketImplementationProxy.ReadBytes(var VBuffer: TIdBytes;
   AByteCount: Integer; AAppend: Boolean);
 begin
-  inherited;
+  FRealIOHandlerI.inherited_ReadBytes(VBuffer, AByteCount, AAppend);
   {$IFDEF DEBUG_WS}
-  if IsWebsocket then  
+  //if IsWebsocket then
   if Debughook > 0 then
   begin
     OutputDebugString(PChar(Format('%d Bytes read(TID:%d): %s',
                                    [AByteCount, getcurrentthreadid, BytesToStringRaw(VBuffer, AByteCount)])));
     OutputDebugString(PChar(Format('Buffer (HeadIndex:%d): %s',
-                                   [TIdBuffer_Ext(InputBuffer).FHeadIndex,
-                                    BytesToStringRaw(TIdBuffer_Ext(InputBuffer).FBytes,
-                                    InputBuffer.Size + TIdBuffer_Ext(InputBuffer).FHeadIndex)])));
+                                   [TIdBuffer_Ext(FRealIOHandler.InputBuffer).FHeadIndex,
+                                    BytesToStringRaw(TIdBuffer_Ext(FRealIOHandler.InputBuffer).FBytes,
+                                    FRealIOHandler.InputBuffer.Size + TIdBuffer_Ext(FRealIOHandler.InputBuffer).FHeadIndex)])));
   end;
   {$ENDIF}
 end;
 
-function TIdIOHandlerWebsocket.ReadDataFromSource(
+function TWebsocketImplementationProxy.ReadDataFromSource(
   var VBuffer: TIdBytes): Integer;
 var
   wscode: TWSDataCode;
@@ -649,11 +747,11 @@ begin
   try
     if not IsWebsocket then
     begin
-      Result := inherited ReadDataFromSource(VBuffer);
+      Result := FRealIOHandlerI.Inherited_ReadDataFromSource(VBuffer);
       {$IFDEF DEBUG_WS}
       if Debughook > 0 then
         OutputDebugString(PChar(Format('Received (non ws, TID:%d, P:%d): %s',
-                                       [getcurrentthreadid, Self.Binding.PeerPort, BytesToStringRaw(VBuffer, Result)])));
+                                       [getcurrentthreadid, FRealIOHandler.Binding.PeerPort, BytesToStringRaw(VBuffer, Result)])));
       {$ENDIF}
     end
     else
@@ -664,28 +762,32 @@ begin
 
         {$IFDEF DEBUG_WS}
         if Debughook > 0 then
-          OutputDebugString(PChar(Format('Received (ws, TID:%d, P:%d): %s',
-                                         [getcurrentthreadid, Self.Binding.PeerPort, BytesToStringRaw(VBuffer)])));
+          OutputDebugString(PChar(Format('Received (ws, IsServerSide: %s, TID:%d, P:%d): %s',
+                                         [BoolToStr(IsServerSide), getcurrentthreadid, FRealIOHandler.Binding.PeerPort, BytesToStringRaw(VBuffer)])));
         {$ENDIF}
 
         //first write the data code (text or binary, ping, pong)
-        FInputBuffer.Write(LongWord(Ord(wscode)));
+        FRealIOHandler.FInputBuffer.Write(LongWord(Ord(wscode)));
         //we write message size here, vbuffer is written after this. This way we can use ReadStream to get 1 single message (in case multiple messages in FInputBuffer)
-        if LargeStream then
-          FInputBuffer.Write(Int64(Result))
+        if FRealIOHandler.LargeStream then
+          FRealIOHandler.FInputBuffer.Write(Int64(Result))
         else
-          FInputBuffer.Write(LongWord(Result))
+          FRealIOHandler.FInputBuffer.Write(LongWord(Result))
       except
-        FClosedGracefully := True; //closed (but not gracefully?)
+        on e:Exception do
+        begin
+          Unlock;  //always unlock when socket exception
+          FRealIOHandler.FClosedGracefully := True; //closed (but not gracefully?)
         Raise;
       end;
+    end;
     end;
   finally
     Unlock;  //normal unlock (no double try finally)
   end;
 end;
 
-function TIdIOHandlerWebsocket.ReadMessage(var aBuffer: TIdBytes; out aDataCode: TWSDataCode): Integer;
+function TWebsocketImplementationProxy.ReadMessage(var aBuffer: TIdBytes; out aDataCode: TWSDataCode): Integer;
 var
   iReadCount: Integer;
   iaReadBuffer: TIdBytes;
@@ -802,48 +904,48 @@ begin
   end;
 end;
 
-procedure TIdIOHandlerWebsocket.SetIsWebsocket(const Value: Boolean);
+procedure TWebsocketImplementationProxy.SetIsWebsocket(const Value: Boolean);
 var data: TIdBytes;
 begin
   //copy websocket data which was send/received during http upgrade
   if not FIsWebsocket and Value and
-     (FInputBuffer.Size > 0) then
+     (FRealIOHandler.FInputBuffer.Size > 0) then
   begin
-    FInputBuffer.ExtractToBytes(data);
+    FRealIOHandler.FInputBuffer.ExtractToBytes(data);
     FWSInputBuffer.Write(data);
   end;
 
   FIsWebsocket := Value;
 end;
 
-procedure TIdIOHandlerWebsocket.Lock;
+procedure TWebsocketImplementationProxy.Lock;
 begin
   FLock.Enter;
 end;
 
-function TIdIOHandlerWebsocket.TryLock: Boolean;
+function TWebsocketImplementationProxy.TryLock: Boolean;
 begin
   Result := FLock.TryEnter;
 end;
 
-procedure TIdIOHandlerWebsocket.Unlock;
+procedure TWebsocketImplementationProxy.Unlock;
 begin
   FLock.Leave;
 end;
 
 {$if CompilerVersion >= 26}   //XE5
-function TIdIOHandlerWebsocket.UTF8Encoding: IIdTextEncoding;
+function TWebsocketImplementationProxy.UTF8Encoding: IIdTextEncoding;
 begin
   Result := IndyTextEncoding_UTF8;
 end;
 {$else}
-function TIdIOHandlerWebsocket.UTF8Encoding: TEncoding;
+function TWebsocketImplementationProxy.UTF8Encoding: TEncoding;
 begin
   Result := TIdTextEncoding.UTF8;
 end;
 {$ifend}
 
-function TIdIOHandlerWebsocket.ReadFrame(out aFIN, aRSV1, aRSV2, aRSV3: boolean;
+function TWebsocketImplementationProxy.ReadFrame(out aFIN, aRSV1, aRSV2, aRSV3: boolean;
                                          out aDataCode: TWSDataCode; out aData: TIdBytes): Integer;
 var
   iInputPos: NativeInt;
@@ -1015,11 +1117,11 @@ begin
   {$IFDEF DEBUG_WS}
   if debughook > 0 then
     OutputDebugString(PChar(Format('Received (TID:%d, P:%d, Count=%d): %s',
-                                   [getcurrentthreadid, Self.Binding.PeerPort, Result, BytesToStringRaw(aData, Result)])));
+                                   [getcurrentthreadid, FRealIOHandler.Binding.PeerPort, Result, BytesToStringRaw(aData, Result)])));
   {$ENDIF}
 end;
 
-function TIdIOHandlerWebsocket.WriteData(aData: TIdBytes;
+function TWebsocketImplementationProxy.WriteData(aData: TIdBytes;
   aType: TWSDataCode; aFIN, aRSV1, aRSV2, aRSV3: boolean): integer;
 var
   iByte: Byte;
@@ -1035,7 +1137,7 @@ var
   bData: TIdBytes;
 begin
   Result := 0;
-  Assert(Binding <> nil);
+  Assert(FRealIOHandler.Binding <> nil);
 
   strmData := TMemoryStream.Create;
   Lock;
@@ -1137,7 +1239,9 @@ begin
     ioffset := 0;
     repeat
       //Result := Binding.Send(bData, ioffset);
-      Result := inherited WriteDataToTarget(bdata, iOffset, (Length(bData) - ioffset));    //ssl compatible?
+      Result := FRealIOHandlerI.inherited_WriteDataToTarget(bdata, iOffset, (Length(bData) - ioffset));    //ssl compatible?
+      if Result <= 0 then
+        Break;
       Inc(ioffset, Result);
     until ioffset >= Length(bData);
 
@@ -1154,7 +1258,7 @@ end;
 
 procedure TIdWebsocketQueueThread.AfterConstruction;
 begin
-  inherited;
+  inherited AfterConstruction;
   FLock       := TCriticalSection.Create;
   FEvents     := TList<TThreadProcedure>.Create;
   FProcessing := TList<TThreadProcedure>.Create;
@@ -1171,7 +1275,7 @@ begin
   UnLock;
   FEvents.Free;
   FLock.Free;
-  inherited;
+  inherited Destroy;
 end;
 
 procedure TIdWebsocketQueueThread.Execute;
@@ -1289,6 +1393,228 @@ begin
     FInstance.WaitFor;
     FreeAndNil(FInstance);
   end;
+end;
+
+{ TIdIOHandlerWebsocketPlain }
+
+procedure TIdIOHandlerWebsocketPlain.AfterConstruction;
+begin
+  inherited AfterConstruction;
+  FWebsocketImpl := TWebsocketImplementationProxy.Create;
+
+  FWebsocketImpl.FRealIOHandler := TIdIOHandlerStack_Ext(Self as TIdIOHandlerStack);
+
+  FWebsocketImpl.FRealIOHandlerI.Inherited_Connected          := function: Boolean begin
+    Result := inherited Connected() end;
+  FWebsocketImpl.FRealIOHandlerI.Inherited_ReadDataFromSource := function (var VBuffer: TIdBytes): Integer begin
+    Result := inherited ReadDataFromSource(VBuffer) end;
+  FWebsocketImpl.FRealIOHandlerI.Inherited_Write              := procedure(const AOut: string; AEncoding: TIdTextEncoding = nil) begin
+    inherited Write(AOut, AEncoding) end;
+  FWebsocketImpl.FRealIOHandlerI.Inherited_WriteLn            := procedure(const AOut: string; AEncoding: TIdTextEncoding = nil) begin
+    inherited WriteLn(AOut, AEncoding) end;
+  FWebsocketImpl.FRealIOHandlerI.Inherited_WriteLnRFC         := procedure(const AOut: string = ''; AEncoding: TIdTextEncoding = nil) begin
+    inherited WriteLnRFC(AOut, AEncoding) end;
+  FWebsocketImpl.FRealIOHandlerI.Inherited_Write2             := procedure(AValue: TStrings; AWriteLinesCount: Boolean = False; AEncoding: TIdTextEncoding = nil) begin
+    inherited Write(AValue, AWriteLinesCount, AEncoding) end;
+  FWebsocketImpl.FRealIOHandlerI.Inherited_WriteBufferFlush   := procedure(AByteCount: Integer) begin
+    inherited WriteBufferFlush(AByteCount) end;
+  FWebsocketImpl.FRealIOHandlerI.Inherited_Write3             := procedure(AStream: TStream; ASize: TIdStreamSize = 0; AWriteByteCount: Boolean = False) begin
+    inherited Write(AStream, ASize, AWriteByteCount) end;
+  FWebsocketImpl.FRealIOHandlerI.Inherited_WriteDataToTarget  := function (const ABuffer: TIdBytes; const AOffset, ALength: Integer): Integer begin
+    Result := inherited WriteDataToTarget(ABuffer, AOffset, ALength) end;
+  FWebsocketImpl.FRealIOHandlerI.Inherited_Readable           := function (AMSec: Integer = IdTimeoutDefault): Boolean begin
+    Result := inherited Readable(AMSec) end;
+  FWebsocketImpl.FRealIOHandlerI.Inherited_ReadBytes          := procedure(var VBuffer: TIdBytes; AByteCount: Integer; AAppend: Boolean = True) begin
+    inherited ReadBytes(VBuffer, AByteCount, AAppend);
+  end;
+end;
+
+destructor TIdIOHandlerWebsocketPlain.Destroy;
+begin
+  FWebsocketImpl.Free;
+  inherited Destroy;
+end;
+
+procedure TIdIOHandlerWebsocketPlain.Close;
+begin
+  FWebsocketImpl.Close;
+  inherited Close;
+end;
+
+function TIdIOHandlerWebsocketPlain.Connected: Boolean;
+begin
+  Result := FWebsocketImpl.Connected()
+end;
+
+function TIdIOHandlerWebsocketPlain.Readable(AMSec: Integer): Boolean;
+begin
+  Result := WebsocketImpl.Readable(AMSec);
+end;
+
+procedure TIdIOHandlerWebsocketPlain.ReadBytes(var VBuffer: TIdBytes; AByteCount: Integer; AAppend: Boolean);
+begin
+  WebsocketImpl.ReadBytes(VBuffer, AByteCount, AAppend);
+end;
+
+function TIdIOHandlerWebsocketPlain.ReadDataFromSource(var VBuffer: TIdBytes): Integer;
+begin
+  Result := WebsocketImpl.ReadDataFromSource(VBuffer);
+end;
+
+function TIdIOHandlerWebsocketPlain.WebsocketImpl: TWebsocketImplementationProxy;
+begin
+  Result := FWebsocketImpl;
+end;
+
+procedure TIdIOHandlerWebsocketPlain.Write(AStream: TStream; aType: TWSDataType);
+begin
+  WebsocketImpl.Write(AStream, aType);
+end;
+
+procedure TIdIOHandlerWebsocketPlain.Write(const AOut: string; AEncoding: TIdTextEncoding);
+begin
+  WebsocketImpl.Write(AOut, AEncoding);
+end;
+
+procedure TIdIOHandlerWebsocketPlain.Write(AValue: TStrings; AWriteLinesCount: Boolean; AEncoding: TIdTextEncoding);
+begin
+  WebsocketImpl.Write(AValue, AWriteLinesCount, AEncoding);
+end;
+
+procedure TIdIOHandlerWebsocketPlain.WriteBufferFlush(AByteCount: Integer);
+begin
+  WebsocketImpl.WriteBufferFlush(AByteCount);
+end;
+
+function TIdIOHandlerWebsocketPlain.WriteDataToTarget(const ABuffer: TIdBytes; const AOffset, ALength: Integer): Integer;
+begin
+  Result := WebsocketImpl.WriteDataToTarget(ABuffer, AOffset, ALength);
+end;
+
+procedure TIdIOHandlerWebsocketPlain.WriteLn(const AOut: string; AEncoding: TIdTextEncoding);
+begin
+  WebsocketImpl.WriteLn(AOut, AEncoding);
+end;
+
+procedure TIdIOHandlerWebsocketPlain.WriteLnRFC(const AOut: string; AEncoding: TIdTextEncoding);
+begin
+  WebsocketImpl.WriteLnRFC(AOut, AEncoding);
+end;
+
+{ TIdIOHandlerWebsocketSSL }
+
+procedure TIdIOHandlerWebsocketSSL.AfterConstruction;
+begin
+  inherited AfterConstruction;
+  FWebsocketImpl := TWebsocketImplementationProxy.Create;
+
+  FWebsocketImpl.FRealIOHandlerI.Inherited_Connected          := function: Boolean begin
+    Result := inherited Connected() end;
+  FWebsocketImpl.FRealIOHandlerI.Inherited_ReadDataFromSource := function (var VBuffer: TIdBytes): Integer begin
+    Result := inherited ReadDataFromSource(VBuffer) end;
+  FWebsocketImpl.FRealIOHandlerI.Inherited_Write              := procedure(const AOut: string; AEncoding: TIdTextEncoding = nil) begin
+    inherited Write(AOut, AEncoding) end;
+  FWebsocketImpl.FRealIOHandlerI.Inherited_WriteLn            := procedure(const AOut: string; AEncoding: TIdTextEncoding = nil) begin
+    inherited WriteLn(AOut, AEncoding) end;
+  FWebsocketImpl.FRealIOHandlerI.Inherited_WriteLnRFC         := procedure(const AOut: string = ''; AEncoding: TIdTextEncoding = nil) begin
+    inherited WriteLnRFC(AOut, AEncoding) end;
+  FWebsocketImpl.FRealIOHandlerI.Inherited_Write2             := procedure(AValue: TStrings; AWriteLinesCount: Boolean = False; AEncoding: TIdTextEncoding = nil) begin
+    inherited Write(AValue, AWriteLinesCount, AEncoding) end;
+  FWebsocketImpl.FRealIOHandlerI.Inherited_WriteBufferFlush   := procedure(AByteCount: Integer) begin
+    inherited WriteBufferFlush(AByteCount) end;
+  FWebsocketImpl.FRealIOHandlerI.Inherited_Write3             := procedure(AStream: TStream; ASize: TIdStreamSize = 0; AWriteByteCount: Boolean = False) begin
+    inherited Write(AStream, ASize, AWriteByteCount) end;
+  FWebsocketImpl.FRealIOHandlerI.Inherited_WriteDataToTarget  := function (const ABuffer: TIdBytes; const AOffset, ALength: Integer): Integer begin
+    if fSSLSocket <> nil then
+      Result := inherited WriteDataToTarget(ABuffer, AOffset, ALength) end;
+  FWebsocketImpl.FRealIOHandlerI.Inherited_Readable           := function (AMSec: Integer = IdTimeoutDefault): Boolean begin
+    Result := inherited Readable(AMSec) end;
+  FWebsocketImpl.FRealIOHandlerI.Inherited_ReadBytes          := procedure(var VBuffer: TIdBytes; AByteCount: Integer; AAppend: Boolean = True) begin
+    inherited ReadBytes(VBuffer, AByteCount, AAppend) end;
+
+  FWebsocketImpl.FRealIOHandler := TIdIOHandlerStack_Ext(Self as TIdSSLIOHandlerSocketOpenSSL);
+end;
+
+procedure TIdIOHandlerWebsocketSSL.ClearSSLOptions;
+begin
+  if not Self.IsPeer then
+  with Self do
+  begin
+    SSLOptions.Free;
+    SSLOptions := nil;
+  end;
+end;
+
+procedure TIdIOHandlerWebsocketSSL.Close;
+begin
+  FWebsocketImpl.Close;
+  inherited Close;
+end;
+
+function TIdIOHandlerWebsocketSSL.Connected: Boolean;
+begin
+  Result := WebsocketImpl.Connected;
+end;
+
+destructor TIdIOHandlerWebsocketSSL.Destroy;
+begin
+  FWebsocketImpl.Free;
+  inherited Destroy;
+end;
+
+function TIdIOHandlerWebsocketSSL.Readable(AMSec: Integer): Boolean;
+begin
+  Result := WebsocketImpl.Readable(AMSec);
+end;
+
+procedure TIdIOHandlerWebsocketSSL.ReadBytes(var VBuffer: TIdBytes; AByteCount: Integer; AAppend: Boolean);
+begin
+  WebsocketImpl.ReadBytes(VBuffer, AByteCount, AAppend);
+end;
+
+function TIdIOHandlerWebsocketSSL.ReadDataFromSource(var VBuffer: TIdBytes): Integer;
+begin
+  Result := WebsocketImpl.ReadDataFromSource(VBuffer);
+end;
+
+function TIdIOHandlerWebsocketSSL.WebsocketImpl: TWebsocketImplementationProxy;
+begin
+  Result := FWebsocketImpl;
+end;
+
+procedure TIdIOHandlerWebsocketSSL.Write(AStream: TStream; aType: TWSDataType);
+begin
+  WebsocketImpl.Write(AStream, aType);
+end;
+
+procedure TIdIOHandlerWebsocketSSL.Write(const AOut: string; AEncoding: TIdTextEncoding);
+begin
+  WebsocketImpl.Write(AOut, AEncoding);
+end;
+
+procedure TIdIOHandlerWebsocketSSL.Write(AValue: TStrings; AWriteLinesCount: Boolean; AEncoding: TIdTextEncoding);
+begin
+  WebsocketImpl.Write(AValue, AWriteLinesCount, AEncoding);
+end;
+
+procedure TIdIOHandlerWebsocketSSL.WriteBufferFlush(AByteCount: Integer);
+begin
+  WebsocketImpl.WriteBufferFlush(AByteCount);
+end;
+
+function TIdIOHandlerWebsocketSSL.WriteDataToTarget(const ABuffer: TIdBytes; const AOffset, ALength: Integer): Integer;
+begin
+  Result := WebsocketImpl.WriteDataToTarget(ABuffer, AOffset, ALength);
+end;
+
+procedure TIdIOHandlerWebsocketSSL.WriteLn(const AOut: string; AEncoding: TIdTextEncoding);
+begin
+  WebsocketImpl.WriteLn(AOut, AEncoding);
+end;
+
+procedure TIdIOHandlerWebsocketSSL.WriteLnRFC(const AOut: string; AEncoding: TIdTextEncoding);
+begin
+  WebsocketImpl.WriteLnRFC(AOut, AEncoding);
 end;
 
 end.
