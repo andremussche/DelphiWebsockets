@@ -6,7 +6,7 @@ uses
   Classes, Generics.Collections,
   superobject,
   IdServerBaseHandling, IdContext, IdException, IdIOHandlerWebsocket, IdHTTP,
-  SyncObjs, SysUtils;
+  SyncObjs, SysUtils, IdIOHandlerStack;
 
 type
   TSocketIOContext = class;
@@ -74,7 +74,7 @@ type
   protected
     FHandling: TIdBaseSocketIOHandling;
     FContext: TIdContext;
-    FIOHandler: TIdIOHandlerWebsocket;
+    FIOHandler: TIdIOHandlerStack;
     FClient: TIdHTTP;
     FEvent: TEvent;
     FQueue: TList<string>;
@@ -163,6 +163,7 @@ type
     procedure ProcessEvent(const AContext: ISocketIOContext; const aText: string; aMsgNr: Integer; aHasCallback: Boolean);
   private
     FOnEventError: TSocketIOEventError;
+    FDefaultErrorCallback: TSocketIOError;
   protected
     type
       TSocketIOCallback    = procedure(const aData: string) of object;
@@ -221,6 +222,7 @@ type
     procedure OnConnection(const aCallback: TSocketIONotify);
     procedure OnDisconnect(const aCallback: TSocketIONotify);
     property  OnEventError: TSocketIOEventError read FOnEventError write FOnEventError;
+    property  DefaultErrorCallback: TSocketIOError read FDefaultErrorCallback write FDefaultErrorCallback;
 
     procedure EnumerateSockets(const aEachSocketCallback: TSocketIONotify);
   end;
@@ -547,7 +549,7 @@ begin
     if FOnEventList.TryGetValue(name, list) then
     begin
       if list.Count = 0 then
-        raise EIdSocketIoUnhandledMessage.Create(aText);
+        raise EIdSocketIoUnhandledMessage.Create('No listener available for event: ' + aText);
 
 //      socket   := FConnections.Items[AContext];
       if aHasCallback then
@@ -560,7 +562,7 @@ begin
           event(AContext, args, callback);
         except on E:Exception do
           if Assigned(OnEventError) then
-            OnEventError(AContext, callback, e)
+            OnEventError(AContext, callback, e)   //custom error handling (send different error back to remote client/context/initiator?)
           else
             if callback <> nil then
               callback.SendResponse( SO(['Error', SO(['msg', e.message])]).AsJSon );
@@ -570,7 +572,7 @@ begin
       end;
     end
     else
-      raise EIdSocketIoUnhandledMessage.Create(aText);
+      raise EIdSocketIoUnhandledMessage.Create('No listeners registered for event: ' + aText);
   finally
 //    args.Free;
     json := nil;
@@ -742,6 +744,7 @@ procedure TIdBaseSocketIOHandling.ProcessSocketIORequest(
 
 var
   str, smsg, schannel, sdata: string;
+  sErrorType, sErrorMsg: string;
   imsg: Integer;
   bCallback: Boolean;
 //  socket: TSocketIOContext;
@@ -878,7 +881,7 @@ begin
       ProcessEvent(socket, sdata, imsg, bCallback);
     except
       on e:exception do
-        //
+        raise
     end
   end
   //(6) ACK
@@ -890,10 +893,7 @@ begin
     imsg  := StrToIntDef(smsg, 0);
     sData := Copy(sdata, Pos('+', sData)+1, Length(sData));
 
-    TSocketIOContext(ASocket).FPendingMessages.Remove(imsg);
-    if FSocketIOErrorRef.TryGetValue(imsg, errorref) then
-    begin
-      FSocketIOErrorRef.Remove(imsg);
+    error := nil;
       //'[{"Error":{"Message":"Operation aborted","Type":"EAbort"}}]'
       if ContainsText(sdata, '{"Error":') then
       begin
@@ -901,15 +901,39 @@ begin
         if error.IsType(stArray) then
           error := error.O['0'];
         error := error.O['Error'];
+
+      sErrorType := error.S['Type'];
         if error.S['Message'] <> '' then
-          errorref(ASocket, error.S['Type'], error.S['Message'])
+        sErrorMsg := error.S['Message']
+      else if error.S['msg'] <> '' then
+        sErrorMsg := error.S['msg']
         else
-          errorref(ASocket, 'Unknown', sdata);
+      begin
+        sErrorMsg  := sdata;
+        sErrorType := 'Unknown';
+      end;
+    end;
+
+    TSocketIOContext(ASocket).FPendingMessages.Remove(imsg);
+    if FSocketIOErrorRef.TryGetValue(imsg, errorref) then
+    begin
+      FSocketIOErrorRef.Remove(imsg);
+      if error <> nil then
+      begin
+        errorref(ASocket, sErrorType, sErrorMsg);
 
         FSocketIOEventCallback.Remove(imsg);
         FSocketIOEventCallbackRef.Remove(imsg);
         Exit;
       end;
+    end;
+    //no error handler? than always raise an exception so programmer gets notified (and can log it using exception logger)
+    if error <> nil then
+    begin
+      if Assigned(DefaultErrorCallback) then
+        DefaultErrorCallback(ASocket, sErrorType, sErrorMsg)
+      else
+        raise ESocketIOException.CreateFmt('Server side error "%s": %s', [sErrorType, sErrorMsg]);
     end;
 
     if FSocketIOEventCallback.TryGetValue(imsg, callback) then
