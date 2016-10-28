@@ -156,7 +156,7 @@ begin
   //* client to server */
   received := '';
   IndyHTTPWebsocketServer1.SocketIO.OnEvent('TEST_EVENT',
-    procedure(const ASocket: ISocketIOContext; const aArgument: TSuperArray; const aCallbackObj: TSocketIOCallbackObj)
+    procedure(const ASocket: ISocketIOContext; const aArgument: TSuperArray; const aCallbackObj: ISocketIOCallback)
     begin
       received := aArgument.ToJson;
     end);
@@ -180,7 +180,7 @@ begin
   //* server to client */
   received := '';
   IndyHTTPWebsocketClient1.SocketIO.OnEvent('TEST_EVENT',
-    procedure(const ASocket: ISocketIOContext; const aArgument: TSuperArray; const aCallbackObj: TSocketIOCallbackObj)
+    procedure(const ASocket: ISocketIOContext; const aArgument: TSuperArray; const aCallbackObj: ISocketIOCallback)
     begin
       received := aArgument.ToJson;
     end);
@@ -205,12 +205,12 @@ begin
   //* client to server */
   FLastSocketIOMsg := '';
   IndyHTTPWebsocketServer1.SocketIO.OnSocketIOMsg :=
-    procedure(const ASocket: ISocketIOContext; const aText: string; const aCallback: TSocketIOCallbackObj)
+    procedure(const ASocket: ISocketIOContext; const aText: string; const aCallback: ISocketIOCallback)
     begin
       Abort;
     end;
   IndyHTTPWebsocketClient1.SocketIO.Send('test message',
-    procedure(const ASocket: ISocketIOContext; const aJSON: ISuperObject; const aCallback: TSocketIOCallbackObj)
+    procedure(const ASocket: ISocketIOContext; const aJSON: ISuperObject; const aCallback: ISocketIOCallback)
     begin
       FLastSocketIOMsg := aJSON.AsString;
     end);
@@ -223,7 +223,7 @@ begin
 
   FLastSocketIOMsg := '';
   IndyHTTPWebsocketClient1.SocketIO.Send('test message',
-    procedure(const ASocket: ISocketIOContext; const aJSON: ISuperObject; const aCallback: TSocketIOCallbackObj)
+    procedure(const ASocket: ISocketIOContext; const aJSON: ISuperObject; const aCallback: ISocketIOCallback)
     begin
       Assert(False, 'should go to error handling callback');
       FLastSocketIOMsg := 'error';
@@ -252,7 +252,7 @@ begin
   //* client to server */
   FLastSocketIOMsg := '';
   IndyHTTPWebsocketServer1.SocketIO.OnSocketIOMsg :=
-    procedure(const ASocket: ISocketIOContext; const aText: string; const aCallback: TSocketIOCallbackObj)
+    procedure(const ASocket: ISocketIOContext; const aText: string; const aCallback: ISocketIOCallback)
     begin
       FLastSocketIOMsg := aText;
     end;
@@ -267,7 +267,7 @@ begin
   //* server to client */
   FLastSocketIOMsg := '';
   IndyHTTPWebsocketClient1.SocketIO.OnSocketIOMsg :=
-    procedure(const ASocket: ISocketIOContext; const aText: string; const aCallback: TSocketIOCallbackObj)
+    procedure(const ASocket: ISocketIOContext; const aText: string; const aCallback: ISocketIOCallback)
     begin
       FLastSocketIOMsg := aText;
     end;

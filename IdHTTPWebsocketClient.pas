@@ -1,23 +1,13 @@
 unit IdHTTPWebsocketClient;
-
 interface
-
+{$I wsdefines.pas}
 uses
   Classes,
   IdHTTP,
-  {$IF CompilerVersion <= 21.0}  //D2010
-  IdHashSHA1,
-  {$else}
   Types,
   IdHashSHA,                     //XE3 etc
-  {$IFEND}
   IdIOHandler,
   IdIOHandlerWebsocket,
-  {$ifdef FMX}
-  FMX.Types,
-  {$ELSE}
-  ExtCtrls,
-  {$ENDIF}
   IdWinsock2, Generics.Collections, SyncObjs,
   IdSocketIOHandling;
 
@@ -557,7 +547,11 @@ begin
     begin
       Request.Clear;
       Request.Connection := 'keep-alive';
+      {$IFDEF WEBSOCKETSSL}
+      sURL := Format('https://%s:%d/socket.io/1/', [Host, Port]);
+      {$ELSE}
       sURL := Format('http://%s:%d/socket.io/1/', [Host, Port]);
+      {$ENDIF}
       strmResponse.Clear;
 
       ReadTimeout := 5 * 1000;
