@@ -625,12 +625,7 @@ begin
     //ws://host:port/<resourcename>
     //about resourcename, see: http://dev.w3.org/html5/websockets/ "Parsing WebSocket URLs"
     //sURL := Format('ws://%s:%d/%s', [Host, Port, WSResourceName]);
-    sURL := Format('https://%s:%d/%s', [Host, Port, WSResourceName]);
-{$IFDEF WS_NO_SSL}
-    //TODO: depend protocol on usessl - param passing in here
     sURL := Format('http://%s:%d/%s', [Host, Port, WSResourceName]);
-{$ENDIF}
-    
     ReadTimeout := Max(5 * 1000, ReadTimeout);
 
     { voorbeeld:

@@ -4,7 +4,7 @@ interface
 
 uses
   IdServerWebsocketHandling, IdServerSocketIOHandling, IdServerWebsocketContext,
-  IdHTTPServer, IdContext, IdCustomHTTPServer, Classes, IdIOHandlerWebsocket, IdServerIOHandler;
+  IdHTTPServer, IdContext, IdCustomHTTPServer, Classes, IdIOHandlerWebsocket;
 
 type
   TWebsocketMessageText = procedure(const AContext: TIdServerWSContext; const aText: string)  of object;
@@ -43,12 +43,7 @@ type
 implementation
 
 uses
-  IdServerIOHandlerWebsocket, IdStreamVCL, IdGlobal, Windows, 
-{$IFNDEF WS_NO_SSL}  
-  idIOHandler, 
-  idssl,
-{$ENDIF}
-  IdWinsock2;
+  IdServerIOHandlerWebsocket, IdStreamVCL, IdGlobal, Windows, IdWinsock2;
 
 { TIdWebsocketServer }
 

@@ -137,9 +137,7 @@ begin
           aSocketIOHandler.WritePing(context);
         end
         else
-        begin
           context.IOHandler.WriteData(nil, wdcPing);
-        end;
       end;
 
     end;
@@ -327,22 +325,13 @@ begin
       hash.Free;
     end;
     AResponseInfo.CustomHeaders.Values['Sec-WebSocket-Accept'] := sValue;
-{$IFNDEF WS_NO_SSL}
-    //keep alive the ssl connection
-    AResponseInfo.CustomHeaders.Values['Keep-alive'] := 'true';
-{$ENDIF}
-        
+
     //send same protocol back?
     AResponseInfo.CustomHeaders.Values['Sec-WebSocket-Protocol']   := context.WebSocketProtocol;
     //we do not support extensions yet (gzip deflate compression etc)
     //AResponseInfo.CustomHeaders.Values['Sec-WebSocket-Extensions'] := context.WebSocketExtensions;
     //http://www.lenholgate.com/blog/2011/07/websockets---the-deflate-stream-extension-is-broken-and-badly-designed.html
     //but is could be done using idZlib.pas and DecompressGZipStream etc
-{$IFNDEF WS_NO_SSL}
-    //YD: TODO: Check if this is really necessary
-    AResponseInfo.CustomHeaders.Values['sec-websocket-extensions']   := '';
-    context.WebSocketExtensions := '';
-{$ENDIF}
 
     //send response back
     context.IOHandler.InputBuffer.Clear;
