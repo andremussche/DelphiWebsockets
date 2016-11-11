@@ -92,6 +92,9 @@ end;
 
 procedure TForm1.Button2Click(Sender: TObject);
 begin
+  client.Free;
+  server.Free;
+
   server := TIdWebsocketServer.Create(Self);
   server.DefaultPort := 12346;
   server.Active      := True;

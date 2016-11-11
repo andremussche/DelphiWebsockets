@@ -2,7 +2,7 @@ unit IdServerIOHandlerWebsocket;
 interface
 {$I wsdefines.pas}
 uses
-  Classes
+  Classes, SysUtils
   , IdServerIOHandlerStack
   , IdIOHandlerStack
   , IdGlobal
@@ -26,7 +26,11 @@ type
   protected
     procedure InitComponent; override;
     {$IFDEF WEBSOCKETSSL}
+    {$if CompilerVersion >= 31}   //XE10
+    function GetIOHandlerSelf: TIdSSLIOHandlerSocketOpenSSL;
+    {$else}
     function CreateOpenSSLSocket:TIdSSLIOHandlerSocketOpenSSL; override;
+    {$endif}
     {$ENDIF}
   public
     function Accept(ASocket: TIdSocketHandle; AListenerThread: TIdThread;
@@ -39,20 +43,27 @@ implementation
 { TIdServerIOHandlerStack_Websocket }
 
 {$IFDEF WEBSOCKETSSL}
+  {$if CompilerVersion >= 31}   //XE10
+function TIdServerIOHandlerWebsocket.GetIOHandlerSelf:TIdSSLIOHandlerSocketOpenSSL;
+begin
+  Result := TIdIOHandlerWebsocket.Create(nil);
+end;
+  {$else}
 function TIdServerIOHandlerWebsocket.CreateOpenSSLSocket:TIdSSLIOHandlerSocketOpenSSL;
 begin
   Result := TIdIOHandlerWebsocket.Create(nil);
 end;
+  {$endif}
 {$ENDIF}
 
 function TIdServerIOHandlerWebsocket.Accept(ASocket: TIdSocketHandle;
   AListenerThread: TIdThread; AYarn: TIdYarn): TIdIOHandler;
-{$IFNDEF WS_NO_SSL}  ?
+{$IFDEF WEBSOCKETSSL}
 var
   LIO: TIdIOHandlerWebsocket;
 {$ENDIF}
 begin
-{$IFDEF WS_NO_SSL}  ?
+{$IFnDEF WEBSOCKETSSL}
   Result := inherited Accept(ASocket, AListenerThread, AYarn);
 {$ELSE}
   Assert(ASocket<>nil);

@@ -69,16 +69,16 @@ type
     function ReadFrame(out aFIN, aRSV1, aRSV2, aRSV3: boolean; out aDataCode: TWSDataCode; out aData: TIdBytes): Integer;
     function ReadMessage(var aBuffer: TIdBytes; out aDataCode: TWSDataCode): Integer;
 
-    {.$if CompilerVersion >= 26}   //XE5
-    //function UTF8Encoding: IIdTextEncoding;
-    {.$else}
+    {$if CompilerVersion >= 26}   //XE5
+    function UTF8Encoding: IIdTextEncoding;
+    {$else}
     function UTF8Encoding: TEncoding;
     {$ifend}
     procedure InitComponent; override;
   public
-{$IFNDEF WS_NO_SSL}
+    {$IFDEF WEBSOCKETSSL}
     procedure ClearSSLOptions;
-{$ENDIF}    
+    {$ENDIF}
     function WriteData(aData: TIdBytes; aType: TWSDataCode;
                         aFIN: boolean = true; aRSV1: boolean = false; aRSV2: boolean = false; aRSV3: boolean = false): integer;
     property BusyUpgrading : Boolean read FBusyUpgrading write FBusyUpgrading;
@@ -304,7 +304,7 @@ begin
   FPendingWriteCount := 0;
 end;
 
-{$IFNDEF WS_NO_SSL}
+{$IFDEF WEBSOCKETSSL}
 procedure TIdIOHandlerWebsocket.ClearSSLOptions;
 begin
   self.fxSSLOptions.Free;
@@ -603,7 +603,9 @@ begin
 end;
 
 function TIdIOHandlerWebsocket.WriteDataToTarget(const ABuffer: TIdBytes; const AOffset, ALength: Integer): Integer;
-var data: TIdBytes; DataCode:TWSDataCode; fin:boolean;
+var
+  //data: TIdBytes;
+  DataCode:TWSDataCode; fin:boolean;
 begin
   if UseSingleWriteThread and IsWebsocket and (GetCurrentThreadId <> TIdWebsocketWriteThread.Instance.ThreadID) then
     Assert(False, 'Write done in different thread than TIdWebsocketWriteThread!');
@@ -630,7 +632,7 @@ begin
       try
         DataCode := fPayloadInfo.aDataCode;
         fin := fPayloadInfo.DecLength(ALength);
-        Result := WriteData(data, DataCode, fin,webBit1 in ClientExtensionBits, webBit2 in ClientExtensionBits, webBit3 in ClientExtensionBits);
+        Result := WriteData(ABuffer, DataCode, fin,webBit1 in ClientExtensionBits, webBit2 in ClientExtensionBits, webBit3 in ClientExtensionBits);
       except
         FClosedGracefully := True;
         Result := -1;
@@ -872,17 +874,17 @@ begin
   FLock.Leave;
 end;
 
-{.$if CompilerVersion >= 26}   //XE5
-//function TIdIOHandlerWebsocket.UTF8Encoding: IIdTextEncoding;
-//begin
-//  Result := IndyTextEncoding_UTF8;
-//end;
-{.$else}
+{$if CompilerVersion >= 26}   //XE5
+function TIdIOHandlerWebsocket.UTF8Encoding: IIdTextEncoding;
+begin
+  Result := IndyTextEncoding_UTF8;
+end;
+{$else}
 function TIdIOHandlerWebsocket.UTF8Encoding: TEncoding;
 begin
   Result := TIdTextEncoding.UTF8;
 end;
-{.$ifend}
+{$ifend}
 
 function TIdIOHandlerWebsocket.ReadFrame(out aFIN, aRSV1, aRSV2, aRSV3: boolean;
                                          out aDataCode: TWSDataCode; out aData: TIdBytes): Integer;

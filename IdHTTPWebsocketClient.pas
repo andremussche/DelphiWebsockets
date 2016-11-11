@@ -619,8 +619,9 @@ begin
     //ws://host:port/<resourcename>
     //about resourcename, see: http://dev.w3.org/html5/websockets/ "Parsing WebSocket URLs"
     //sURL := Format('ws://%s:%d/%s', [Host, Port, WSResourceName]);
+{$IFDEF WEBSOCKETSSL}
     sURL := Format('https://%s:%d/%s', [Host, Port, WSResourceName]);
-{$IFDEF WS_NO_SSL}
+{$ELSE}
     //TODO: depend protocol on usessl - param passing in here
     sURL := Format('http://%s:%d/%s', [Host, Port, WSResourceName]);
 {$ENDIF}

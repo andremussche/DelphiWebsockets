@@ -95,7 +95,7 @@ begin
 
           strmRequest.Position := 0;
           //first is the type: text or bin
-          wscode := TWSDataCode(context.IOHandler.ReadLongWord);
+          wscode := TWSDataCode(context.IOHandler.ReadUInt32); //ReadLongWord);
           //then the length + data = stream
           context.IOHandler.ReadStream(strmRequest);
           strmRequest.Position := 0;

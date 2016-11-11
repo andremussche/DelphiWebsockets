@@ -16,18 +16,18 @@ object Form1: TForm1
   object Button1: TButton
     Left = 8
     Top = 8
-    Width = 75
+    Width = 121
     Height = 25
-    Caption = 'Button1'
+    Caption = 'Socket.IO test'
     TabOrder = 0
     OnClick = Button1Click
   end
   object Button2: TButton
     Left = 8
     Top = 39
-    Width = 75
+    Width = 121
     Height = 25
-    Caption = 'Button2'
+    Caption = 'Plain websocket test'
     TabOrder = 1
     OnClick = Button2Click
   end
