@@ -1,20 +1,19 @@
 unit IdIOHandlerWebsocket;
-
 {.$DEFINE DEBUG_WS}
-
 //The WebSocket Protocol, RFC 6455
 //http://datatracker.ietf.org/doc/rfc6455/?include_text=1
-
 interface
-
+{$I wsdefines.pas}
 uses
-  Classes, SysUtils,
-  IdIOHandlerStack, IdGlobal, IdException, IdBuffer,
-  SyncObjs,
-{$IFNDEF WS_NO_SSL}
-  IdSSLOpenSSL,
-{$ENDIF}
-  Generics.Collections;
+  Classes, SysUtils , SyncObjs , Generics.Collections
+  , IdIOHandlerStack
+  , IdGlobal
+  , IdException
+  , IdBuffer
+  {$IFDEF WEBSOCKETSSL}
+  , IdSSLOpenSSL
+  {$ENDIF}
+  ;
 
 type
   TWSDataType      = (wdtText, wdtBinary);
@@ -25,14 +24,23 @@ type
   TIdIOHandlerWebsocket   = class;
   EIdWebSocketHandleError = class(EIdSocketHandleError);
 
-  {.$if CompilerVersion >= 26}   //XE5
-  //TIdTextEncoding = IIdTextEncoding;
-  {.$ifend}
-{$IFDEF WS_NO_SSL}
-  TIdIOHandlerWebsocket = class(TIdIOHandlerStack)
-{$ELSE}
+  {$if CompilerVersion >= 26}   //XE5
+  TIdTextEncoding = IIdTextEncoding;
+  {$ifend}
+
+  TIOWSPayloadInfo = Record
+    aPayloadLength: Cardinal;
+    aDataCode: TWSDataCode;
+    procedure Initialize(iTextMode:Boolean; iPayloadLength:Cardinal);
+    function DecLength(value:Cardinal):boolean;
+    procedure Clear;
+  end;
+
+  {$IFDEF WEBSOCKETSSL}
   TIdIOHandlerWebsocket = class(TIdSSLIOHandlerSocketOpenSSL)
-{$ENDIF}
+  {$ELSE}
+  TIdIOHandlerWebsocket = class(TIdIOHandlerStack)
+  {$ENDIF}
   private
     FIsServerSide: Boolean;
     FBusyUpgrading: Boolean;
@@ -50,9 +58,9 @@ type
     procedure SetIsWebsocket(const Value: Boolean);
   protected
     FMessageStream: TMemoryStream;
-    FWriteTextToTarget: Boolean;
     FCloseCodeSend: Boolean;
     FPendingWriteCount: Integer;
+    fPayloadInfo: TIOWSPayloadInfo;
 
     function InternalReadDataFromSource(var VBuffer: TIdBytes; ARaiseExceptionOnTimeout: Boolean): Integer;
     function ReadDataFromSource(var VBuffer: TIdBytes): Integer; override;
@@ -65,7 +73,8 @@ type
     //function UTF8Encoding: IIdTextEncoding;
     {.$else}
     function UTF8Encoding: TEncoding;
-    {.$ifend}
+    {$ifend}
+    procedure InitComponent; override;
   public
 {$IFNDEF WS_NO_SSL}
     procedure ClearSSLOptions;
@@ -77,8 +86,6 @@ type
     property IsServerSide  : Boolean read FIsServerSide  write FIsServerSide;
     property ClientExtensionBits : TWSExtensionBits read FExtensionBits write FExtensionBits;
   public
-    class constructor Create;
-    procedure  AfterConstruction;override;
     destructor Destroy; override;
 
     procedure Lock;
@@ -238,15 +245,45 @@ begin
   end;
 end;
 
+{ TIOWSPayloadInfo }
+
+procedure TIOWSPayloadInfo.Initialize(iTextMode:Boolean; iPayloadLength:Cardinal);
+begin
+  aPayloadLength := iPayloadLength;
+  if iTextMode
+     then aDataCode := wdcText
+     else aDataCode := wdcBinary;
+end;
+
+procedure TIOWSPayloadInfo.Clear;
+begin
+  aPayloadLength := 0;
+  aDataCode := wdcBinary;
+end;
+
+function TIOWSPayloadInfo.DecLength(value:Cardinal):boolean;
+begin
+  if aPayloadLength >= value then
+   begin
+     aPayloadLength := aPayloadLength - value;
+   end
+   else aPayloadLength := 0;
+  aDataCode := wdcContinuation;
+  Result := aPayloadLength = 0;
+end;
+
 { TIdIOHandlerStack_Websocket }
 
-procedure TIdIOHandlerWebsocket.AfterConstruction;
+procedure TIdIOHandlerWebsocket.InitComponent;
 begin
-  inherited;
+  inherited ;
   FMessageStream := TMemoryStream.Create;
   FWSInputBuffer := TIdBuffer.Create;
   FLock := TCriticalSection.Create;
   FSelectLock := TCriticalSection.Create;
+  {$IFDEF WEBSOCKETSSL}
+  //SendBufferSize := 15 * 1024;
+  {$ENDIF}
 end;
 
 procedure TIdIOHandlerWebsocket.Clear;
@@ -262,7 +299,7 @@ begin
   FCloseCode := 0;
   FLastActivityTime := 0;
   FLastPingTime := 0;
-  FWriteTextToTarget := False;
+  fPayloadInfo.Clear;
   FCloseCodeSend := False;
   FPendingWriteCount := 0;
 end;
@@ -357,11 +394,6 @@ begin
   end;
 end;
 
-class constructor TIdIOHandlerWebsocket.Create;
-begin
-  //UseSingleWriteThread := True;
-end;
-
 destructor TIdIOHandlerWebsocket.Destroy;
 begin
   while FPendingWriteCount > 0 do
@@ -417,8 +449,7 @@ begin
   SetLength(VBuffer, Result);
 end;
 
-procedure TIdIOHandlerWebsocket.WriteLn(const AOut: string;
-  AEncoding: TIdTextEncoding);
+procedure TIdIOHandlerWebsocket.WriteLn(const AOut:string; AEncoding: TIdTextEncoding);
 begin
   if UseSingleWriteThread and IsWebsocket and
      (GetCurrentThreadId <> TIdWebsocketWriteThread.Instance.ThreadID) then
@@ -435,10 +466,10 @@ begin
   begin
     Lock;
     try
-      FWriteTextToTarget := True;
+      fPayloadInfo.Initialize(True,0);
       inherited WriteLn(AOut, UTF8Encoding);  //must be UTF8!
     finally
-      FWriteTextToTarget := False;
+      fPayloadInfo.Clear;
       Unlock;
     end;
   end;
@@ -462,10 +493,10 @@ begin
   begin
     Lock;
     try
-      FWriteTextToTarget := True;
+      fPayloadInfo.Initialize(True,0);
       inherited WriteLnRFC(AOut, UTF8Encoding);  //must be UTF8!
     finally
-      FWriteTextToTarget := False;
+      fPayloadInfo.Clear;
       Unlock;
     end;
   end;
@@ -489,10 +520,10 @@ begin
   begin
     Lock;
     try
-      FWriteTextToTarget := True;
+      fPayloadInfo.Initialize(True,0);
       inherited Write(AOut, UTF8Encoding);  //must be UTF8!
     finally
-      FWriteTextToTarget := False;
+      fPayloadInfo.Clear;
       Unlock;
     end;
   end;
@@ -516,10 +547,10 @@ begin
   begin
     Lock;
     try
-      FWriteTextToTarget := True;
+      fPayloadInfo.Initialize(True,0);
       inherited Write(AValue, AWriteLinesCount, UTF8Encoding);  //must be UTF8!
     finally
-      FWriteTextToTarget := False;
+      fPayloadInfo.Clear;
       Unlock;
     end;
   end;
@@ -543,10 +574,10 @@ begin
   begin
     Lock;
     try
-      FWriteTextToTarget := (aType = wdtText);
+      fPayloadInfo.Initialize((aType = wdtText),AStream.Size);
       inherited Write(AStream);
     finally
-      FWriteTextToTarget := False;
+      fPayloadInfo.Clear;
       Unlock;
     end;
   end;
@@ -571,8 +602,8 @@ begin
     inherited WriteBufferFlush(AByteCount);
 end;
 
-function TIdIOHandlerWebsocket.WriteDataToTarget(const ABuffer: TIdBytes;
-  const AOffset, ALength: Integer): Integer;
+function TIdIOHandlerWebsocket.WriteDataToTarget(const ABuffer: TIdBytes; const AOffset, ALength: Integer): Integer;
+var data: TIdBytes; DataCode:TWSDataCode; fin:boolean;
 begin
   if UseSingleWriteThread and IsWebsocket and (GetCurrentThreadId <> TIdWebsocketWriteThread.Instance.ThreadID) then
     Assert(False, 'Write done in different thread than TIdWebsocketWriteThread!');
@@ -597,12 +628,9 @@ begin
                                        [getcurrentthreadid, Self.Binding.PeerPort, BytesToStringRaw(ABuffer)])));
       {$ENDIF}
       try
-        if FWriteTextToTarget then
-          Result := WriteData(ABuffer, wdcText, True{send all at once},
-                              webBit1 in ClientExtensionBits, webBit2 in ClientExtensionBits, webBit3 in ClientExtensionBits)
-        else
-          Result := WriteData(ABuffer, wdcBinary, True{send all at once},
-                              webBit1 in ClientExtensionBits, webBit2 in ClientExtensionBits, webBit3 in ClientExtensionBits);
+        DataCode := fPayloadInfo.aDataCode;
+        fin := fPayloadInfo.DecLength(ALength);
+        Result := WriteData(data, DataCode, fin,webBit1 in ClientExtensionBits, webBit2 in ClientExtensionBits, webBit3 in ClientExtensionBits);
       except
         FClosedGracefully := True;
         Result := -1;
@@ -866,7 +894,7 @@ var
     temp: TIdBytes;
   begin
     //if HasData then Exit(True);
-    if (FWSInputBuffer.Size > 0) then Exit(True);
+    if (FWSInputBuffer.Size > iInputPos) then Exit(True);
 
     Result := InternalReadDataFromSource(temp, ARaiseExceptionOnTimeout) > 0;
     if Result then
@@ -1032,8 +1060,7 @@ begin
   {$ENDIF}
 end;
 
-function TIdIOHandlerWebsocket.WriteData(aData: TIdBytes;
-  aType: TWSDataCode; aFIN, aRSV1, aRSV2, aRSV3: boolean): integer;
+function TIdIOHandlerWebsocket.WriteData(aData:TIdBytes; aType:TWSDataCode; aFIN,aRSV1,aRSV2,aRSV3:boolean): integer;
 var
   iByte: Byte;
   i, ioffset: NativeInt;
@@ -1064,7 +1091,7 @@ begin
       | |1|2|3|       |K|             |                               |
       +-+-+-+-+-------+-+-------------+ - - - - - - - - - - - - - - - + *)
     //FIN, RSV1, RSV2, RSV3: 1 bit each
-    if aFIN  then iByte :=         (1 shl 7);
+    if aFIN  then iByte :=         (1 shl 7) else iByte := 0;
     if aRSV1 then iByte := iByte + (1 shl 6);
     if aRSV2 then iByte := iByte + (1 shl 5);
     if aRSV3 then iByte := iByte + (1 shl 4);
@@ -1151,6 +1178,15 @@ begin
     iDataLength := Length(bData);
     repeat
       result := inherited WriteDataToTarget(bdata,iOffset, (iDataLength-ioffset));
+      if Result<0 then
+        begin
+         // IO error ; probably connexion closed by peer on protocol error ?
+         {$IFDEF DEBUG_WS}
+         if Debughook > 0 then
+           OutputDebugString(PChar(Format('WriteError ThrID:%d, L:%d, R:%d',[getcurrentthreadid,Length(bData)-ioffset,Result])));
+         {$ENDIF}
+         break;
+       end;
       Inc(ioffset, Result);
     until ioffset >= iDataLength;
 

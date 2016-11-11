@@ -1,12 +1,18 @@
 unit IdServerSocketIOHandling;
-
 interface
-
+{$I wsdefines.pas}
 uses
-  IdContext, IdCustomTCPServer,
-  //IdServerWebsocketContext,
-  Classes, Generics.Collections,
-  superobject, IdException, IdServerBaseHandling, IdSocketIOHandling;
+  Classes, Generics.Collections, SysUtils, StrUtils
+  , IdContext
+  , IdCustomTCPServer
+  , IdException
+  //
+  {$IFDEF SUPEROBJECT}
+  , superobject
+  {$ENDIF}
+  , IdServerBaseHandling
+  , IdSocketIOHandling
+  ;
 
 type
   TIdServerSocketIOHandling = class(TIdBaseSocketIOHandling)
@@ -15,22 +21,27 @@ type
   public
     function  SendToAll(const aMessage: string; const aCallback: TSocketIOMsgJSON = nil; const aOnError: TSocketIOError = nil): Integer;
     procedure SendTo   (const aContext: TIdServerContext; const aMessage: string; const aCallback: TSocketIOMsgJSON = nil; const aOnError: TSocketIOError = nil);
-
-    function  EmitEventToAll(const aEventName: string; const aData: ISuperObject; const aCallback: TSocketIOMsgJSON = nil; const aOnError: TSocketIOError = nil): Integer;overload;
     function  EmitEventToAll(const aEventName: string; const aData: string      ; const aCallback: TSocketIOMsgJSON = nil; const aOnError: TSocketIOError = nil): Integer;overload;
-    procedure EmitEventTo   (const aContext: ISocketIOContext;
-                             const aEventName: string; const aData: ISuperObject; const aCallback: TSocketIOMsgJSON = nil; const aOnError: TSocketIOError = nil);overload;
+    {$IFDEF SUPEROBJECT}
+    function  EmitEventToAll(const aEventName: string; const aData: ISuperObject; const aCallback: TSocketIOMsgJSON = nil; const aOnError: TSocketIOError = nil): Integer;overload;
     procedure EmitEventTo   (const aContext: TIdServerContext;
                              const aEventName: string; const aData: ISuperObject; const aCallback: TSocketIOMsgJSON = nil; const aOnError: TSocketIOError = nil);overload;
+    procedure EmitEventTo   (const aContext: ISocketIOContext;
+                             const aEventName: string; const aData: ISuperObject; const aCallback: TSocketIOMsgJSON = nil; const aOnError: TSocketIOError = nil);overload;
+    {$ENDIF}
   end;
 
 implementation
 
-uses
-  SysUtils, StrUtils;
-
 { TIdServerSocketIOHandling }
 
+procedure TIdServerSocketIOHandling.ProcessHeatbeatRequest(
+  const AContext: ISocketIOContext; const aText: string);
+begin
+  inherited ProcessHeatbeatRequest(AContext, aText);
+end;
+
+{$IFDEF SUPEROBJECT}
 procedure TIdServerSocketIOHandling.EmitEventTo(
   const aContext: ISocketIOContext; const aEventName: string;
   const aData: ISuperObject; const aCallback: TSocketIOMsgJSON; const aOnError: TSocketIOError);
@@ -71,6 +82,16 @@ begin
     UnLock;
   end;
 end;
+
+function TIdServerSocketIOHandling.EmitEventToAll(const aEventName: string; const aData: ISuperObject;
+  const aCallback: TSocketIOMsgJSON; const aOnError: TSocketIOError): Integer;
+begin
+  if aData.IsType(stString) then
+    Result := EmitEventToAll(aEventName, '"' + aData.AsString + '"', aCallback, aOnError)
+  else
+    Result := EmitEventToAll(aEventName, aData.AsString, aCallback, aOnError);
+end;
+{$ENDIF}
 
 function TIdServerSocketIOHandling.EmitEventToAll(const aEventName,
   aData: string; const aCallback: TSocketIOMsgJSON;
@@ -123,21 +144,6 @@ begin
   finally
     UnLock;
   end;
-end;
-
-function TIdServerSocketIOHandling.EmitEventToAll(const aEventName: string; const aData: ISuperObject;
-  const aCallback: TSocketIOMsgJSON; const aOnError: TSocketIOError): Integer;
-begin
-  if aData.IsType(stString) then
-    Result := EmitEventToAll(aEventName, '"' + aData.AsString + '"', aCallback, aOnError)
-  else
-    Result := EmitEventToAll(aEventName, aData.AsString, aCallback, aOnError);
-end;
-
-procedure TIdServerSocketIOHandling.ProcessHeatbeatRequest(
-  const AContext: ISocketIOContext; const aText: string);
-begin
-  inherited ProcessHeatbeatRequest(AContext, aText);
 end;
 
 procedure TIdServerSocketIOHandling.SendTo(const aContext: TIdServerContext;

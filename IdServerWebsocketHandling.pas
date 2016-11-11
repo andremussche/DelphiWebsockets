@@ -1,16 +1,24 @@
 unit IdServerWebsocketHandling;
-
 interface
-
+{$I wsdefines.pas}
 uses
-  IdContext, IdCustomHTTPServer,
+  Classes, StrUtils, SysUtils, DateUtils
+  , IdCoderMIME
+  , IdThread
+  , IdContext
+  , IdCustomHTTPServer
   {$IF CompilerVersion <= 21.0}  //D2010
-  IdHashSHA1,
+  , IdHashSHA1
   {$else}
-  IdHashSHA,                     //XE3 etc
+  , IdHashSHA                     //XE3 etc
   {$IFEND}
-  IdServerSocketIOHandling, IdServerWebsocketContext,
-  Classes, IdServerBaseHandling, IdIOHandlerWebsocket, IdSocketIOHandling;
+  , IdServerSocketIOHandling
+  //
+  , IdSocketIOHandling
+  , IdServerBaseHandling
+  , IdServerWebsocketContext
+  , IdIOHandlerWebsocket
+  ;
 
 type
   TIdServerSocketIOHandling_Ext = class(TIdServerSocketIOHandling)
@@ -19,7 +27,7 @@ type
   TIdServerWebsocketHandling = class(TIdServerBaseHandling)
   protected
     class procedure DoWSExecute(AThread: TIdContext; aSocketIOHandler: TIdServerSocketIOHandling_Ext);virtual;
-    class procedure HandleWSMessage(AContext: TIdServerWSContext; aType: TWSDataType;
+    class procedure HandleWSMessage(AContext: TIdServerWSContext; var aType: TWSDataType;
                                     aRequestStrm, aResponseStrm: TMemoryStream;
                                     aSocketIOHandler: TIdServerSocketIOHandling_Ext);virtual;
   public
@@ -30,10 +38,6 @@ type
   end;
 
 implementation
-
-uses
-  StrUtils, SysUtils, DateUtils,
-  IdCustomTCPServer, IdCoderMIME, IdThread;
 
 { TIdServerWebsocketHandling }
 
@@ -103,23 +107,20 @@ begin
             Continue;
           end;
 
-          if wscode = wdcText then
-            wstype := wdtText
-          else
-            wstype := wdtBinary;
+          if wscode = wdcText
+             then wstype := wdtText
+             else wstype := wdtBinary;
 
           HandleWSMessage(context, wstype, strmRequest, strmResponse, aSocketIOHandler);
 
           //write result back (of the same type: text or bin)
           if strmResponse.Size > 0 then
           begin
-            if wscode = wdcText then
-              context.IOHandler.Write(strmResponse, wdtText)
-            else
-              context.IOHandler.Write(strmResponse, wdtBinary)
+            if wstype = wdtText
+               then context.IOHandler.Write(strmResponse, wdtText)
+               else context.IOHandler.Write(strmResponse, wdtBinary)
           end
-          else
-            context.IOHandler.WriteData(nil, wdcPing);
+          else context.IOHandler.WriteData(nil, wdcPing);
         finally
           strmRequest.Free;
           strmResponse.Free;
@@ -154,9 +155,7 @@ begin
   end;
 end;
 
-class procedure TIdServerWebsocketHandling.HandleWSMessage(AContext: TIdServerWSContext; aType: TWSDataType;
-  aRequestStrm, aResponseStrm: TMemoryStream;
-  aSocketIOHandler: TIdServerSocketIOHandling_Ext);
+class procedure TIdServerWebsocketHandling.HandleWSMessage(AContext: TIdServerWSContext; var aType:TWSDataType; aRequestStrm, aResponseStrm: TMemoryStream; aSocketIOHandler: TIdServerSocketIOHandling_Ext);
 begin
   if AContext.IsSocketIO then
   begin
@@ -172,6 +171,7 @@ class function TIdServerWebsocketHandling.ProcessServerCommandGet(
   AThread: TIdServerWSContext; ARequestInfo: TIdHTTPRequestInfo;
   AResponseInfo: TIdHTTPResponseInfo): Boolean;
 var
+  Accept: Boolean;
   sValue, squid: string;
   context: TIdServerWSContext;
   hash: TIdHashSHA1;
@@ -245,6 +245,13 @@ begin
   begin
     Result  := True;  //handled
     context := AThread as TIdServerWSContext;
+
+    if Assigned(Context.OnWebSocketUpgrade) then
+     begin
+        Accept := True;
+        Context.OnWebSocketUpgrade(Context,ARequestInfo,Accept);
+        if not Accept then Abort;
+     end;
 
     //Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==
     sValue := ARequestInfo.RawHeaders.Values['sec-websocket-key'];

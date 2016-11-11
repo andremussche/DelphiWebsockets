@@ -1,16 +1,22 @@
 unit IdServerWebsocketContext;
-
 interface
-
+{$I wsdefines.pas}
 uses
-  Classes,
-  IdCustomTCPServer, IdIOHandlerWebsocket,
-  IdServerBaseHandling, IdServerSocketIOHandling, IdContext;
+  Classes, strUtils
+  , IdContext
+  , IdCustomTCPServer
+  , IdCustomHTTPServer
+  //
+  , IdIOHandlerWebsocket
+  , IdServerBaseHandling
+  , IdServerSocketIOHandling
+  ;
 
 type
   TIdServerWSContext = class;
 
-  TWebsocketChannelRequest = procedure(const AContext: TIdServerWSContext; aType: TWSDataType; const strmRequest, strmResponse: TMemoryStream) of object;
+  TWebSocketUpgradeEvent = procedure(const AContext: TIdServerWSContext; ARequestInfo: TIdHTTPRequestInfo; var Accept:boolean) of object;
+  TWebsocketChannelRequest = procedure(const AContext: TIdServerWSContext; var aType:TWSDataType; const strmRequest, strmResponse: TMemoryStream) of object;
 
   TIdServerWSContext = class(TIdServerContext)
   private
@@ -25,6 +31,7 @@ type
     FWebSocketExtensions: string;
     FCookie: string;
     //FSocketIOPingSend: Boolean;
+    fOnWebSocketUpgrade: TWebSocketUpgradeEvent;
     FOnCustomChannelExecute: TWebsocketChannelRequest;
     FSocketIO: TIdServerSocketIOHandling;
     FOnDestroy: TIdContextEvent;
@@ -50,13 +57,11 @@ type
     property WebSocketVersion   : Integer read FWebSocketVersion write FWebSocketVersion;
     property WebSocketExtensions: string  read FWebSocketExtensions write FWebSocketExtensions;
   public
+    property OnWebSocketUpgrade: TWebsocketUpgradeEvent read FOnWebSocketUpgrade write FOnWebSocketUpgrade;
     property OnCustomChannelExecute: TWebsocketChannelRequest read FOnCustomChannelExecute write FOnCustomChannelExecute;
   end;
 
 implementation
-
-uses
-  StrUtils;
 
 { TIdServerWSContext }
 

@@ -1,16 +1,41 @@
 unit IdWebsocketServer;
-
 interface
-
+{$I wsdefines.pas}
 uses
-  IdServerWebsocketHandling, IdServerSocketIOHandling, IdServerWebsocketContext,
-  IdHTTPServer, IdContext, IdCustomHTTPServer, Classes, IdIOHandlerWebsocket, IdServerIOHandler;
+  Classes
+  , IdStreamVCL
+  , IdGlobal
+  , IdWinsock2
+  , IdHTTPServer
+  , IdContext
+  , IdCustomHTTPServer
+  , IdHTTPWebBrokerBridge
+  //
+  , IdIOHandlerWebsocket
+  , IdServerIOHandlerWebsocket
+  , IdServerWebsocketContext
+  , IdServerWebsocketHandling
+  , IdServerSocketIOHandling
+  ;
 
 type
   TWebsocketMessageText = procedure(const AContext: TIdServerWSContext; const aText: string)  of object;
   TWebsocketMessageBin  = procedure(const AContext: TIdServerWSContext; const aData: TStream) of object;
 
+  {$IFDEF WEBSOCKETBRIDGE}
+  TMyIdHttpWebBrokerBridge = class(TidHttpWebBrokerBridge)
+  published
+    property OnCreatePostStream;
+    property OnDoneWithPostStream;
+    property OnCommandGet;
+  end;
+  {$ENDIF}
+
+  {$IFDEF WEBSOCKETBRIDGE}
+  TIdWebsocketServer = class(TMyIdHttpWebBrokerBridge)
+  {$ELSE}
   TIdWebsocketServer = class(TIdHTTPServer)
+  {$ENDIF}
   private
     FSocketIO: TIdServerSocketIOHandling_Ext;
     FOnMessageText: TWebsocketMessageText;
@@ -19,12 +44,13 @@ type
     function GetSocketIO: TIdServerSocketIOHandling;
     procedure SetWriteTimeout(const Value: Integer);
   protected
-    procedure DoCommandGet(AContext: TIdContext; ARequestInfo: TIdHTTPRequestInfo;
-     AResponseInfo: TIdHTTPResponseInfo); override;
+    function WebSocketCommandGet(AContext: TIdContext; ARequestInfo: TIdHTTPRequestInfo; AResponseInfo: TIdHTTPResponseInfo):boolean;
+    procedure DoCommandGet(AContext: TIdContext; ARequestInfo: TIdHTTPRequestInfo; AResponseInfo: TIdHTTPResponseInfo); override;
     procedure ContextCreated(AContext: TIdContext); override;
     procedure ContextDisconnected(AContext: TIdContext); override;
 
-    procedure WebsocketChannelRequest(const AContext: TIdServerWSContext; aType: TWSDataType; const aStrmRequest, aStrmResponse: TMemoryStream);
+    procedure WebsocketUpgradeRequest(const AContext: TIdServerWSContext; ARequestInfo: TIdHTTPRequestInfo; var Accept:boolean); virtual;
+    procedure WebsocketChannelRequest(const AContext: TIdServerWSContext; var aType:TWSDataType; const aStrmRequest, aStrmResponse: TMemoryStream); virtual;
   public
     procedure  AfterConstruction; override;
     destructor Destroy; override;
@@ -41,14 +67,6 @@ type
   end;
 
 implementation
-
-uses
-  IdServerIOHandlerWebsocket, IdStreamVCL, IdGlobal, Windows, 
-{$IFNDEF WS_NO_SSL}  
-  idIOHandler, 
-  idssl,
-{$ENDIF}
-  IdWinsock2;
 
 { TIdWebsocketServer }
 
@@ -87,13 +105,20 @@ begin
   FSocketIO.Free;
 end;
 
-procedure TIdWebsocketServer.DoCommandGet(AContext: TIdContext;
-  ARequestInfo: TIdHTTPRequestInfo; AResponseInfo: TIdHTTPResponseInfo);
+function TIdWebsocketServer.WebSocketCommandGet(AContext: TIdContext;
+  ARequestInfo: TIdHTTPRequestInfo; AResponseInfo: TIdHTTPResponseInfo):boolean;
 begin
+  (AContext as TIdServerWSContext).OnWebSocketUpgrade := Self.WebSocketUpgradeRequest;
   (AContext as TIdServerWSContext).OnCustomChannelExecute := Self.WebsocketChannelRequest;
   (AContext as TIdServerWSContext).SocketIO               := FSocketIO;
 
-  if not TIdServerWebsocketHandling.ProcessServerCommandGet(AContext as TIdServerWSContext, ARequestInfo, AResponseInfo) then
+  Result := TIdServerWebsocketHandling.ProcessServerCommandGet(AContext as TIdServerWSContext, ARequestInfo, AResponseInfo);
+end;
+
+procedure TIdWebsocketServer.DoCommandGet(AContext: TIdContext;
+  ARequestInfo: TIdHTTPRequestInfo; AResponseInfo: TIdHTTPResponseInfo);
+begin
+  if not WebSocketCommandGet(AContext,ARequestInfo,AResponseInfo) then
     inherited DoCommandGet(AContext, ARequestInfo, AResponseInfo);
 end;
 
@@ -129,9 +154,12 @@ begin
   FWriteTimeout := Value;
 end;
 
-procedure TIdWebsocketServer.WebsocketChannelRequest(
-  const AContext: TIdServerWSContext; aType: TWSDataType; const aStrmRequest,
-  aStrmResponse: TMemoryStream);
+procedure TIdWebsocketServer.WebsocketUpgradeRequest(const AContext: TIdServerWSContext; ARequestInfo: TIdHTTPRequestInfo; var Accept:boolean);
+begin
+  Accept := True;
+end;
+
+procedure TIdWebsocketServer.WebsocketChannelRequest(const AContext: TIdServerWSContext; var aType:TWSDataType; const aStrmRequest,aStrmResponse: TMemoryStream);
 var s: string;
 begin
   if aType = wdtText then
