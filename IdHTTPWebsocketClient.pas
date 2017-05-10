@@ -830,7 +830,7 @@ begin
       strmEvent.Clear;
 
       //first is the data type TWSDataType(text or bin), but is ignore/not needed
-      wscode := TWSDataCode(IOHandler.ReadLongWord);
+      wscode := TWSDataCode(IOHandler.ReadUInt32);
       if not (wscode in [wdcText, wdcBinary, wdcPing, wdcPong]) then
       begin
         //Sleep(0);

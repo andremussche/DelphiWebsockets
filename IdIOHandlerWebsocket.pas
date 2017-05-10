@@ -416,12 +416,12 @@ begin
   begin
     CheckForDisconnect; //disconnected during wait in "Readable()"?
     if not Opened then
-      EIdNotConnected.Toss(RSNotConnected)
+      raise EIdNotConnected.Create(RSNotConnected) 
     else if not SourceIsAvailable then
-      EIdClosedSocket.Toss(RSStatusDisconnected);
+      raise EIdClosedSocket.Create(RSStatusDisconnected);
     GStack.CheckForSocketError(GStack.WSGetLastError); //check for socket error
     if ARaiseExceptionOnTimeout then
-      EIdReadTimeout.Toss(RSIdNoDataToRead)  //exit, no data can be received
+      raise EIdReadTimeout.Create(RSIdNoDataToRead)  //exit, no data can be received
     else
       Exit(0);
   end;
@@ -433,7 +433,7 @@ begin
     CheckForDisconnect; //disconnected in the mean time?
     GStack.CheckForSocketError(GStack.WSGetLastError); //check for socket error
     if ARaiseExceptionOnTimeout then
-      EIdNoDataToRead.Toss(RSIdNoDataToRead); //nothing read? then connection is probably closed -> exit
+      raise EIdNoDataToRead.Create(RSIdNoDataToRead); //nothing read? then connection is probably closed -> exit
   end;
   SetLength(VBuffer, Result);
 end;
