@@ -790,13 +790,28 @@ begin
         wdcPing:
         begin
           WriteData(iaReadBuffer, wdcPong);  //send pong + same data back
-          lFirstDataCode := lDataCode;
-          //bFIN := False; //ignore ping when we wait for data?
+
+          //ping received, ignore while were are receiving fragmented frames
+          if (lFirstDataCode in [wdcText, wdcBinary]) then
+          begin
+            bFIN := False;
+          end
+          else
+          begin
+            lFirstDataCode := lDataCode;
+          end;
         end;
         wdcPong:
         begin
-           //pong received, ignore;
-          lFirstDataCode := lDataCode;
+          //pong received, ignore while were are receiving fragmented frames
+          if (lFirstDataCode in [wdcText, wdcBinary]) then
+          begin
+            bFIN := False;
+          end
+          else
+          begin
+            lFirstDataCode := lDataCode;
+          end;
         end;
       end;
     end
