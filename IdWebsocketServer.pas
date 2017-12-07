@@ -15,7 +15,7 @@ uses
   , IdServerIOHandlerWebsocket
   , IdServerWebsocketContext
   , IdServerWebsocketHandling
-  , IdServerSocketIOHandling
+  , IdServerSocketIOHandling, IdWebSocketTypes
   ;
 
 type

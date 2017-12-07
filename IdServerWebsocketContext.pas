@@ -9,7 +9,7 @@ uses
   //
   , IdIOHandlerWebsocket
   , IdServerBaseHandling
-  , IdServerSocketIOHandling
+  , IdServerSocketIOHandling, IdWebSocketTypes
   ;
 
 type

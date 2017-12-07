@@ -9,11 +9,11 @@ uses
   IdIOHandler,
   IdIOHandlerWebsocket,
   IdWinsock2, Generics.Collections, SyncObjs,
-  IdSocketIOHandling;
+  IdSocketIOHandling, IdIIOHandlerWebsocket, System.SysUtils, IdWebSocketTypes;
 
 type
-  TWebsocketMsgBin  = procedure(const aData: TStream) of object;
-  TWebsocketMsgText = procedure(const aData: string) of object;
+  TWebsocketMsgBin  = reference to procedure(const aData: TStream);
+  TWebsocketMsgText = reference to procedure(const aData: string);
 
   TIdHTTPWebsocketClient = class;
   TSocketIOMsg = procedure(const AClient: TIdHTTPWebsocketClient; const aText: string; aMsgNr: Integer) of object;
@@ -29,17 +29,21 @@ type
     FOnTextData: TWebsocketMsgText;
     FNoAsyncRead: Boolean;
     FWriteTimeout: Integer;
-    function  GetIOHandlerWS: TIdIOHandlerWebsocket;
-    procedure SetIOHandlerWS(const Value: TIdIOHandlerWebsocket);
+    function  GetIOHandlerWS: IIOHandlerWebsocket;
+    procedure SetIOHandlerWS(const Value: IIOHandlerWebsocket);
     procedure SetOnData(const Value: TWebsocketMsgBin);
     procedure SetOnTextData(const Value: TWebsocketMsgText);
     procedure SetWriteTimeout(const Value: Integer);
+    procedure SetUseSSL(const Value: Boolean);
   protected
     FSocketIOCompatible: Boolean;
     FSocketIOHandshakeResponse: string;
     FSocketIO: TIdSocketIOHandling_Ext;
     FSocketIOContext: ISocketIOContext;
     FSocketIOConnectBusy: Boolean;
+    FUseSSL: Boolean;
+    FCustomHeadersProc: TProc;
+    FRequestType: TIdWebSocketRequestType;
 
     //FHeartBeat: TTimer;
     //procedure HeartBeatTimer(Sender: TObject);
@@ -47,10 +51,12 @@ type
   protected
     procedure InternalUpgradeToWebsocket(aRaiseException: Boolean; out aFailedReason: string);virtual;
     function  MakeImplicitClientHandler: TIdIOHandler; override;
+    procedure DoCustomHeaders; virtual;
   public
     procedure AsyncDispatchEvent(const aEvent: TStream); overload; virtual;
     procedure AsyncDispatchEvent(const aEvent: string); overload; virtual;
     procedure ResetChannel;
+    procedure AddCustomHeadersProc(const AProc: TProc);
   public
     procedure  AfterConstruction; override;
     destructor Destroy; override;
@@ -71,7 +77,10 @@ type
     procedure Ping;
     procedure ReadAndProcessData;
 
-    property  IOHandler: TIdIOHandlerWebsocket read GetIOHandlerWS write SetIOHandlerWS;
+    procedure Post; overload;
+    procedure Post(const AURL: string; AResponseContent: TStream; AIgnoreReplies: TArray<Int16>); overload;
+
+    property  IOHandler: IIOHandlerWebsocket read GetIOHandlerWS write SetIOHandlerWS;
 
     //websockets
     property  OnBinData : TWebsocketMsgBin read FOnData write SetOnData;
@@ -85,6 +94,7 @@ type
   published
     property  Host;
     property  Port;
+    property  UseSSL: Boolean read FUseSSL write SetUseSSL;
     property  WSResourceName: string read FWSResourceName write FWSResourceName;
 
     property  WriteTimeout: Integer read FWriteTimeout write SetWriteTimeout default 2000;
@@ -175,8 +185,8 @@ type
 implementation
 
 uses
-  IdCoderMIME, SysUtils, Math, IdException, IdStackConsts, IdStack,
-  IdStackBSDBase, IdGlobal, Windows, StrUtils, DateUtils;
+  IdCoderMIME, Math, IdException, IdStackConsts, IdStack,
+  IdStackBSDBase, IdGlobal, Windows, StrUtils, DateUtils, IdWebSocketConsts;
 
 var
   GUnitFinalized: Boolean = false;
@@ -211,6 +221,17 @@ var
 //end;
 
 { TIdHTTPWebsocketClient }
+
+procedure TIdHTTPWebsocketClient.DoCustomHeaders;
+begin
+  if Assigned(FCustomHeadersProc) then
+    FCustomHeadersProc();
+end;
+
+procedure TIdHTTPWebsocketClient.AddCustomHeadersProc(const AProc: TProc);
+begin
+  FCustomHeadersProc := AProc;
+end;
 
 procedure TIdHTTPWebsocketClient.AfterConstruction;
 begin
@@ -347,7 +368,7 @@ begin
   inherited;
 end;
 
-procedure TIdHTTPWebsocketClient.DisConnect(ANotifyPeer: Boolean);
+procedure TIdHTTPWebsocketClient.Disconnect(ANotifyPeer: Boolean);
 begin
   if not SocketIOCompatible and
      ( (IOHandler <> nil) and not IOHandler.IsWebsocket)
@@ -370,7 +391,7 @@ begin
       try
         IOHandler.IsWebsocket := False;
 
-        inherited DisConnect(ANotifyPeer);
+        inherited Disconnect(ANotifyPeer);
         //clear buffer, other still "connected"
         IOHandler.Clear;
 
@@ -385,10 +406,10 @@ begin
   end;
 end;
 
-function TIdHTTPWebsocketClient.GetIOHandlerWS: TIdIOHandlerWebsocket;
+function TIdHTTPWebsocketClient.GetIOHandlerWS: IIOHandlerWebsocket;
 begin
 //  if inherited IOHandler is TIdIOHandlerWebsocket then
-    Result := inherited IOHandler as TIdIOHandlerWebsocket
+    Result := (inherited IOHandler) as IIOHandlerWebsocket
 //  else
 //    Assert(False);
 end;
@@ -521,7 +542,7 @@ var
   sURL: string;
   strmResponse: TMemoryStream;
   i: Integer;
-  sKey, sResponseKey: string;
+  sKey, sResponseKey, LUserAgent, LWSResourceName: string;
   sSocketioextended: string;
   bLocked: boolean;
 begin
@@ -547,11 +568,7 @@ begin
     begin
       Request.Clear;
       Request.Connection := 'keep-alive';
-      {$IFDEF WEBSOCKETSSL}
-      sURL := Format('https://%s:%d/socket.io/1/', [Host, Port]);
-      {$ELSE}
-      sURL := Format('http://%s:%d/socket.io/1/', [Host, Port]);
-      {$ENDIF}
+      sURL := Format('http%s://%s:%d/socket.io/1/', [IfThen(UseSSL, 's', ''), Host, Port]);
       strmResponse.Clear;
 
       ReadTimeout := 5 * 1000;
@@ -583,7 +600,9 @@ begin
       end;
     end;
 
+    LUserAgent := Request.UserAgent;
     Request.Clear;
+    Request.UserAgent := LUserAgent;
     Request.CustomHeaders.Clear;
     strmResponse.Clear;
     //http://www.websocket.org/aboutwebsocket.html
@@ -597,9 +616,9 @@ begin
      Sec-WebSocket-Version: 13 *)
 
     //Connection: Upgrade
-    Request.Connection := 'Upgrade';
+    Request.Connection := SUpgrade;
     //Upgrade: websocket
-    Request.CustomHeaders.Add('Upgrade:websocket');
+    Request.CustomHeaders.AddValue(SUpgrade, SWebSocket);
 
     //Sec-WebSocket-Key
     sKey := '';
@@ -607,19 +626,24 @@ begin
       sKey := sKey + Char(Random(127-32) + 32);
     //base64 encoded
     sKey := TIdEncoderMIME.EncodeString(sKey);
-    Request.CustomHeaders.AddValue('Sec-WebSocket-Key', sKey);
+    Request.CustomHeaders.AddValue(SWebSocketKey, sKey);
     //Sec-WebSocket-Version: 13
-    Request.CustomHeaders.AddValue('Sec-WebSocket-Version', '13');
-    Request.CustomHeaders.AddValue('Sec-WebSocket-Extensions', '');
+    Request.CustomHeaders.AddValue(SWebSocketVersion, '13');
+    Request.CustomHeaders.AddValue(SWebSocketExtensions, '');
 
     Request.CacheControl := 'no-cache';
     Request.Pragma := 'no-cache';
-    Request.Host := Format('Host:%s:%d',[Host,Port]);
-    Request.CustomHeaders.AddValue('Origin', Format('http://%s:%d',[Host,Port]) );
+    Request.Host := Format('Host: %s:%d', [Host, Port]);
+    Request.CustomHeaders.AddValue('Origin', Format('http%s://%s:%d', [IfThen(UseSSL, 's', ''), Host, Port]));
+    DoCustomHeaders;
+
     //ws://host:port/<resourcename>
     //about resourcename, see: http://dev.w3.org/html5/websockets/ "Parsing WebSocket URLs"
     //sURL := Format('ws://%s:%d/%s', [Host, Port, WSResourceName]);
-    sURL := Format('http://%s:%d/%s', [Host, Port, WSResourceName]);
+    if WSResourceName.StartsWith('/') then
+      LWSResourceName := WSResourceName.Substring(1) else
+      LWSResourceName := WSResourceName;
+    sURL := Format('http%s://%s:%d/%s', [IfThen(UseSSL, 's', ''), Host, Port, LWSResourceName]);
     ReadTimeout := Max(5 * 1000, ReadTimeout);
 
     { voorbeeld:
@@ -677,7 +701,12 @@ begin
     end
     else
     begin
-      Get(sURL, strmResponse, [101]);
+      case FRequestType of
+        wsrtGet: Get(sURL, strmResponse, [101]);
+        wsrtPost: begin
+            Post(sURL, strmResponse, [101]);
+        end;
+      end;
     end;
 
     //http://www.websocket.org/aboutwebsocket.html
@@ -701,7 +730,7 @@ begin
         Exit;
     end;
     //connection: upgrade
-    if not SameText(Response.Connection, 'upgrade') then
+    if not SameText(Response.Connection, SUpgrade) then
     begin
       aFailedReason := Format('Connection not upgraded: "%s"',[Response.Connection]);
       if aRaiseException then
@@ -710,9 +739,9 @@ begin
         Exit;
     end;
     //upgrade: websocket
-    if not SameText(Response.RawHeaders.Values['upgrade'], 'websocket') then
+    if not SameText(Response.RawHeaders.Values[SUpgrade], SWebSocket) then
     begin
-      aFailedReason := Format('Not upgraded to websocket: "%s"',[Response.RawHeaders.Values['upgrade']]);
+      aFailedReason := Format('Not upgraded to websocket: "%s"', [Response.RawHeaders.Values[SUpgrade]]);
       if aRaiseException then
         raise EIdWebSocketHandleError.Create(aFailedReason)
       else
@@ -723,7 +752,7 @@ begin
                     '258EAFA5-E914-47DA-95CA-C5AB0DC85B11';              //special GUID
     sResponseKey := TIdEncoderMIME.EncodeBytes(                          //Base64
                          FHash.HashString(sResponseKey) );               //SHA1
-    if not SameText(Response.RawHeaders.Values['sec-websocket-accept'], sResponseKey) then
+    if not SameText(Response.RawHeaders.Values[SWebSocketAccept], sResponseKey) then
     begin
       aFailedReason := 'Invalid key handshake';
       if aRaiseException then
@@ -773,16 +802,18 @@ end;
 
 function TIdHTTPWebsocketClient.MakeImplicitClientHandler: TIdIOHandler;
 begin
-  Result := TIdIOHandlerWebsocket.Create(nil);
+  if UseSSL then
+    Result := TIdIOHandlerWebsocketSSL.Create(nil) else
+    Result := TIdIOHandlerWebsocket.Create(nil);
 end;
 
 procedure TIdHTTPWebsocketClient.Ping;
 var
-  ws: TIdIOHandlerWebsocket;
+  ws: IIOHandlerWebsocket;
 begin
   if TryLock then
   try
-    ws  := IOHandler as TIdIOHandlerWebsocket;
+    ws  := IOHandler as IIOHandlerWebsocket;
     ws.LastPingTime := Now;
 
     //socket.io?
@@ -885,9 +916,9 @@ begin
 end;
 
 procedure TIdHTTPWebsocketClient.SetIOHandlerWS(
-  const Value: TIdIOHandlerWebsocket);
+  const Value: IIOHandlerWebsocket);
 begin
-  SetIOHandler(Value);
+  SetIOHandler(Value as TIdIOHandler);
 end;
 
 procedure TIdHTTPWebsocketClient.SetOnData(const Value: TWebsocketMsgBin);
@@ -914,6 +945,15 @@ begin
 //     (Self.IOHandler as TIdIOHandlerWebsocket).IsWebsocket
 //  then
 //    TIdWebsocketMultiReadThread.Instance.AddClient(Self);
+end;
+
+procedure TIdHTTPWebsocketClient.SetUseSSL(const Value: Boolean);
+begin
+  if FUseSSL <> Value then
+    begin
+      FUseSSL := Value;
+      IOHandler := MakeImplicitClientHandler as IIOHandlerWebsocket;
+    end;
 end;
 
 procedure TIdHTTPWebsocketClient.SetWriteTimeout(const Value: Integer);
@@ -1170,6 +1210,47 @@ begin
 end;
 *)
 
+procedure TIdHTTPWebsocketClient.Post(const AURL: string;
+  AResponseContent: TStream; AIgnoreReplies: TArray<Int16>);
+var
+  OldProtocol: TIdHTTPProtocolVersion;
+begin
+  // PLEASE READ CAREFULLY
+
+  // Currently when issuing a POST, IdHTTP will automatically set the protocol
+  // to version 1.0 independently of the value it had initially. This is because
+  // there are some servers that don't respect the RFC to the full extent. In
+  // particular, they don't respect sending/not sending the Expect: 100-Continue
+  // header. Until we find an optimum solution that does NOT break the RFC, we
+  // will restrict POSTS to version 1.0.
+  OldProtocol := FProtocolVersion;
+  try
+    // If hoKeepOrigProtocol is SET, is possible to assume that the developer
+    // is sure in operations of the server
+    if not (hoKeepOrigProtocol in FOptions) then begin
+      if Connected then begin
+        Disconnect;
+      end;
+      FProtocolVersion := pv1_0;
+    end;
+    DoRequest(Id_HTTPMethodPost, AURL, nil, AResponseContent, AIgnoreReplies);
+  finally
+    FProtocolVersion := OldProtocol;
+  end;
+end;
+
+procedure TIdHTTPWebsocketClient.Post;
+var
+  MS: TMemoryStream;
+begin
+  MS := TMemoryStream.Create;
+  try
+    inherited Post(WSResourceName, MS);
+  finally
+    MS.Free;
+  end;
+end;
+
 { TIdWebsocketMultiReadThread }
 
 procedure TIdWebsocketMultiReadThread.AddClient(
@@ -1260,6 +1341,8 @@ begin
 end;
 
 procedure TIdWebsocketMultiReadThread.Execute;
+var
+  EM: string;
 begin
   Self.NameThreadForDebugging(AnsiString(Self.ClassName));
 
@@ -1273,6 +1356,8 @@ begin
       end;
     except
       //continue
+      on E: Exception do
+        EM := E.Message;
     end;
   end;
 end;
@@ -1309,8 +1394,9 @@ procedure TIdWebsocketMultiReadThread.PingAllChannels;
 var
   l: TList;
   chn: TIdHTTPWebsocketClient;
-  ws: TIdIOHandlerWebsocket;
+  ws: IIOHandlerWebsocket;
   i: Integer;
+  EM: string;
 begin
   if Terminated then Exit;
 
@@ -1321,7 +1407,7 @@ begin
       chn := TIdHTTPWebsocketClient(l.Items[i]);
       if chn.NoAsyncRead then Continue;
 
-      ws  := chn.IOHandler as TIdIOHandlerWebsocket;
+      ws  := chn.IOHandler;
       //valid?
       if (chn.IOHandler <> nil) and
          (chn.IOHandler.IsWebsocket) and
@@ -1336,6 +1422,8 @@ begin
           try
             chn.Ping;
           except
+            on E: Exception do
+              EM := E.Message;
             //retry connect the next time?
           end;
       end
@@ -1433,7 +1521,7 @@ var
   iCount,
   i: Integer;
   iResult: NativeInt;
-  ws: TIdIOHandlerWebsocket;
+  ws: IIOHandlerWebsocket;
 begin
   l := FChannels.LockList;
   try
@@ -1519,7 +1607,7 @@ begin
 
         if chn.TryLock then
         try
-          ws  := chn.IOHandler as TIdIOHandlerWebsocket;
+          ws  := chn.IOHandler as IIOHandlerWebsocket;
           if (ws = nil) then Continue;
 
           if ws.TryLock then     //IOHandler.Readable cannot be done during pending action!

@@ -11,7 +11,7 @@ uses
   , IdHTTP
   //
   , IdServerBaseHandling
-  , IdIOHandlerWebsocket
+  , IdIOHandlerWebsocket, IdIIOHandlerWebsocket
   ;
 
 type
@@ -89,7 +89,7 @@ type
   protected
     FHandling: TIdBaseSocketIOHandling;
     FContext: TIdContext;
-    FIOHandler: TIdIOHandlerWebsocket;
+    FIOHandler: IIOHandlerWebsocket;
     FClient: TIdHTTP;
     FEvent: TEvent;
     FQueue: TList<string>;

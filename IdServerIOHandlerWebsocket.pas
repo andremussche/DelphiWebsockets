@@ -26,7 +26,7 @@ type
   protected
     procedure InitComponent; override;
     {$IFDEF WEBSOCKETSSL}
-    function CreateOpenSSLSocket:TIdSSLIOHandlerSocketOpenSSL; override;
+    // function CreateOpenSSLSocket: TIdSSLIOHandlerSocketOpenSSL; override;
     {$ENDIF}
   public
     function Accept(ASocket: TIdSocketHandle; AListenerThread: TIdThread;
@@ -39,10 +39,10 @@ implementation
 { TIdServerIOHandlerStack_Websocket }
 
 {$IFDEF WEBSOCKETSSL}
-function TIdServerIOHandlerWebsocket.CreateOpenSSLSocket:TIdSSLIOHandlerSocketOpenSSL;
-begin
-  Result := TIdIOHandlerWebsocket.Create(nil);
-end;
+//function TIdServerIOHandlerWebsocket.CreateOpenSSLSocket: TIdSSLIOHandlerSocketOpenSSL;
+//begin
+//  Result := TIdIOHandlerWebsocket.Create(nil);
+//end;
 {$ENDIF}
 
 function TIdServerIOHandlerWebsocket.Accept(ASocket: TIdSocketHandle;
