@@ -17,7 +17,7 @@ uses
   , IdSocketIOHandling
   , IdServerBaseHandling
   , IdServerWebsocketContext
-  , IdIOHandlerWebsocket
+  , IdIOHandlerWebsocket, IdWebSocketTypes
   ;
 
 type
@@ -38,6 +38,8 @@ type
   end;
 
 implementation
+uses
+  IdWebSocketConsts;
 
 { TIdServerWebsocketHandling }
 
@@ -95,7 +97,7 @@ begin
 
           strmRequest.Position := 0;
           //first is the type: text or bin
-          wscode := TWSDataCode(context.IOHandler.ReadLongWord);
+          wscode := TWSDataCode(context.IOHandler.ReadUInt32);
           //then the length + data = stream
           context.IOHandler.ReadStream(strmRequest);
           strmRequest.Position := 0;
@@ -194,7 +196,7 @@ begin
      Sec-WebSocket-Version: 13 *)
 
   //Connection: Upgrade
-  if not ContainsText(ARequestInfo.Connection, 'Upgrade') then   //Firefox uses "keep-alive, Upgrade"
+  if not ContainsText(ARequestInfo.Connection, SUpgrade) then   //Firefox uses "keep-alive, Upgrade"
   begin
     //initiele ondersteuning voor socket.io
     if SameText(ARequestInfo.document , '/socket.io/1/') then
@@ -252,7 +254,7 @@ begin
      end;
 
     //Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==
-    sValue := ARequestInfo.RawHeaders.Values['sec-websocket-key'];
+    sValue := ARequestInfo.RawHeaders.Values[SWebSocketKey];
     //"The value of this header field MUST be a nonce consisting of a randomly
     // selected 16-byte value that has been base64-encoded"
     if (sValue <> '') then
@@ -294,7 +296,7 @@ begin
 
     //Sec-WebSocket-Version: 13
     //"The value of this header field MUST be 13"
-    sValue := ARequestInfo.RawHeaders.Values['sec-websocket-version'];
+    sValue := ARequestInfo.RawHeaders.Values[SWebSocketVersion];
     if (sValue <> '') then
     begin
       context.WebSocketVersion := StrToIntDef(sValue, 0);
@@ -305,8 +307,8 @@ begin
     else
       Abort; //must exist
 
-    context.WebSocketProtocol   := ARequestInfo.RawHeaders.Values['sec-websocket-protocol'];
-    context.WebSocketExtensions := ARequestInfo.RawHeaders.Values['sec-websocket-extensions'];
+    context.WebSocketProtocol   := ARequestInfo.RawHeaders.Values[SWebSocketProtocol];
+    context.WebSocketExtensions := ARequestInfo.RawHeaders.Values[SWebSocketExtensions];
 
     //Response
     (* HTTP/1.1 101 Switching Protocols
@@ -317,9 +319,9 @@ begin
     AResponseInfo.ResponseText       := 'Switching Protocols';
     AResponseInfo.CloseConnection    := False;
     //Connection: Upgrade
-    AResponseInfo.Connection         := 'Upgrade';
+    AResponseInfo.Connection         := SUpgrade;
     //Upgrade: websocket
-    AResponseInfo.CustomHeaders.Values['Upgrade'] := 'websocket';
+    AResponseInfo.CustomHeaders.Values[SUpgrade] := SWebSocket;
 
     //Sec-WebSocket-Accept: s3pPLMBiTxaQ9kYGzzhZRbK+xOo=
     sValue := Trim(context.WebSocketKey) +                   //... "minus any leading and trailing whitespace"
@@ -331,10 +333,10 @@ begin
     finally
       hash.Free;
     end;
-    AResponseInfo.CustomHeaders.Values['Sec-WebSocket-Accept'] := sValue;
+    AResponseInfo.CustomHeaders.Values[SWebSocketAccept] := sValue;
 
     //send same protocol back?
-    AResponseInfo.CustomHeaders.Values['Sec-WebSocket-Protocol']   := context.WebSocketProtocol;
+    AResponseInfo.CustomHeaders.Values[SWebSocketProtocol]   := context.WebSocketProtocol;
     //we do not support extensions yet (gzip deflate compression etc)
     //AResponseInfo.CustomHeaders.Values['Sec-WebSocket-Extensions'] := context.WebSocketExtensions;
     //http://www.lenholgate.com/blog/2011/07/websockets---the-deflate-stream-extension-is-broken-and-badly-designed.html
