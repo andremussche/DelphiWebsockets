@@ -8,6 +8,12 @@ Please take a look at the free (but closed) 3rd party component:
 # DelphiWebsockets
 Websockets and Socket.io for Delphi
 
+# License
+Mozilla MPL 1.1
+
+See LICENCE for details.
+
+# Example
 See below for an event driven async example of an socket.io server and client:
 ```delphi
 uses
